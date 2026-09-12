@@ -1,0 +1,11 @@
+# TLS in front of the Node engine (PORT=8080).
+# If you have a real domain, replace :443 with it and Caddy will get a certificate.
+# If you do not, skip this file and run cloudflared on the box instead — see README.md.
+
+:80 {
+	reverse_proxy 127.0.0.1:8080
+}
+
+# huddle.example.com {
+# 	reverse_proxy 127.0.0.1:8080
+# }

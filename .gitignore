@@ -4,3 +4,4 @@ tunnel.log
 *.bak
 *.bak.js
 *.bak.html
+data/*.json

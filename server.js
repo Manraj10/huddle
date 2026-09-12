@@ -6,10 +6,11 @@
 // because the client renders whatever view it is handed.
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
-import { extname, join } from "node:path";
+import { extname, join, normalize, sep } from "node:path";
 import { WebSocketServer } from "ws";
 
 import { MODES, nearest, seatBlocker } from "./modes.js";
+import * as stats from "./deploy/stats.js";
 
 const PORT = Number(process.env.PORT || 8080);
 const PUBLIC = join(import.meta.dirname, "public");
@@ -18,10 +19,20 @@ const HEARTBEAT = 6000;
 
 const http = createServer(async (req, res) => {
   const path = new URL(req.url, "http://x").pathname;
-  const file = path === "/" ? "index.html" : path.slice(1);
+  if (path === "/stats") {
+    res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+    return res.end(JSON.stringify(stats.ticker()));
+  }
+  const file = path === "/" ? "index.html" : path === "/room" || path === "/room/" ? "room.html" : path.slice(1);
+  const abs = normalize(join(PUBLIC, file));
+  const root = PUBLIC.endsWith(sep) ? PUBLIC : PUBLIC + sep;
+  if (abs !== PUBLIC && !abs.startsWith(root)) {
+    res.writeHead(403).end("forbidden");
+    return;
+  }
   try {
-    const body = await readFile(join(PUBLIC, file));
-    res.writeHead(200, { "content-type": TYPES[extname(file)] || "application/octet-stream", "cache-control": "no-store" });
+    const body = await readFile(abs);
+    res.writeHead(200, { "content-type": TYPES[extname(abs)] || "application/octet-stream", "cache-control": "no-store" });
     res.end(body);
   } catch { res.writeHead(404).end("not found"); }
 });
@@ -70,6 +81,16 @@ const ctx = {
     else room.notice = why || room.notice;
     const left = alive();
     if (left.length <= 1) return finish(left[0] || null, null);
+    stats.recordRound({
+      mode: room.modeKey,
+      playerCount: players().length,
+      durationMs: now() - (room.roundStartedAt || now()),
+      winner: null,
+      names: players().map((p) => p.name),
+      reactions: room.modeKey === "flash" && room.data?.taps
+        ? Object.values(room.data.taps).filter((t) => typeof t === "number" && t > 0)
+        : [],
+    });
     room.phase = "gap";
     push();
     clearTimeout(gapTimer);
@@ -82,6 +103,18 @@ const ctx = {
 };
 
 function finish(winner, headline) {
+  const reactions = [];
+  if (room.modeKey === "flash" && room.data?.taps) {
+    for (const t of Object.values(room.data.taps)) if (typeof t === "number" && t > 0) reactions.push(t);
+  }
+  stats.recordRound({
+    mode: room.modeKey,
+    playerCount: players().length,
+    durationMs: now() - (room.roundStartedAt || now()),
+    winner: winner ? winner.name : null,
+    names: players().map((p) => p.name),
+    reactions,
+  });
   room.phase = "over";
   room.winner = winner ? winner.name : null;
   room.headline = headline || null;
@@ -97,6 +130,7 @@ function startRound() {
   room.data = {};
   room.winner = null;
   room.headline = null;
+  room.roundStartedAt = now();
   m.start(ctx);
   push();
 }
@@ -128,7 +162,10 @@ function push() {
     if (p.gone) continue;
     send(p.ws, { ...base, you: { id: p.id, alive: p.alive, score: p.score }, view: viewFor(p) });
   }
-  const spec = { ...base, spectator: true, view: room.phase === "live" ? m.spectate(ctx) : lobbyView(null) };
+  const spec = {
+    ...base, spectator: true, ticker: stats.ticker(),
+    view: room.phase === "live" ? m.spectate(ctx) : lobbyView(null),
+  };
   for (const ws of spectators) send(ws, spec);
 }
 
@@ -180,6 +217,10 @@ wss.on("connection", (ws, req) => {
   ws.on("pong", () => { ws.awake = true; });
   if (new URL(req.url, "http://x").searchParams.has("spectate")) {
     spectators.add(ws);
+    ws.on("message", (buf) => {
+      let msg; try { msg = JSON.parse(buf); } catch { return; }
+      if (msg.t === "ping") return send(ws, { t: "pong", c: msg.c, s: now() });
+    });
     ws.on("close", () => spectators.delete(ws));
     return push();
   }
@@ -239,4 +280,5 @@ wss.on("connection", (ws, req) => {
   });
 });
 
+await stats.load();
 http.listen(PORT, () => console.log(`party engine on http://localhost:${PORT} — modes: ${Object.keys(MODES).join(", ")}`));
