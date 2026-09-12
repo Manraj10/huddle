@@ -4,8 +4,8 @@ Party games that live across everyone's phones. One link, one room, no install.
 
 Huddle is an engine for social party games where the room itself becomes the mechanic. Every player
 gets a different view of the same room, so hidden information is enforced by the authoritative server
-instead of leaked by the client. In Blindside, only the person holding the bomb can see it; everyone
-else sees a room that looks normal, while the room screen keeps the truth.
+instead of leaked by the client. In **Chairs**, your phone names the person you are pointing at and
+refuses to say who is pointing at you — then on each beat the whole room is judged at once.
 
 ## Pitch in 30 seconds
 
@@ -25,13 +25,17 @@ real physical attention in a way that a generic online game never can.
 
 | Game | Players | What happens |
 |---|---|---|
-| **Blindside** | 2+ | A lit fuse sits on one phone and only that person sees it. Swipe toward someone to throw it. For 700 ms it is in the air and nobody has it. Holding it at zero puts you out. |
+| **Chairs** | 3+ | Musical chairs where the chairs are people. On each beat, point at someone nobody else is pointing at. Your phone names who you claimed; never who claimed you. Collisions say `TAKEN — PRIYA, also KAI`. Nobody is out — the room climbs a speed ladder. |
 | **Flash** | 2+ | Every phone lights up at the same instant, to the millisecond, on synced clocks. Slowest tap is out. Tapping early is worse. |
-| **Impostor** | 3+ | Everyone is shown the same word. One player is shown a different one. Say your word out loud, then swipe at whoever you think is lying. |
-| **Relay** | 3+ | Co-op. A token has to travel the ring in seat order, and the room's lap time is the score. A pass to the wrong neighbour costs two seconds. Nobody is eliminated. |
-| **Chain** | 3+ | A growing order of people, shown only to whoever is extending it. Then the room taps it back from memory. You are told your own place and nothing else, so the only way to know whose turn it is is to watch the table. |
-| **Wiretap** | 4+ | Everyone gets a word and exactly two people share one. The pair have to find each other and swipe at each other without the rest of the room working out who they are. |
-| **Duel** | 2+ | Ships on every phone, in a row. A bullet leaving your right edge enters your neighbour's left edge — and while it crosses the real gap between the two phones it is on nobody's screen. |
+| **Standoff** | 2+ | (power / tests) Hidden fuse; point and throw; INCOMING withholds the thrower. |
+| **Blindside** | 2+ | A lit fuse sits on one phone and only that person sees it. Swipe toward someone to throw it. |
+| **Impostor** | 3+ | Everyone is shown the same word. One player is shown a different one. |
+| **Relay** | 3+ | Co-op token around the seat ring. |
+| **Chain** | 3+ | Growing order, recall from memory. |
+| **Wiretap** | 4+ | Secret pair finds each other. |
+| **Duel** | 2+ | Cross-phone ships and bullets. |
+
+Lobby ships **Chairs** + **Flash** only. Default walk-up mode is Chairs.
 
 ## Seats
 
@@ -90,6 +94,10 @@ between playtests without a redeploy.
 | `HUDDLE_SO_LOCK_MS` | `700` | How long after catching before you can throw it on |
 | `HUDDLE_SO_FUSE_MIN_MS` | `14000` | Shortest Standoff fuse |
 | `HUDDLE_SO_FUSE_MAX_MS` | `22000` | Longest Standoff fuse |
+| `HUDDLE_CHAIR_BEAT_MS` | `5000` | First Chairs beat window |
+| `HUDDLE_CHAIR_FLOOR_MS` | `2000` | Fastest Chairs beat after the ladder climbs |
+| `HUDDLE_CHAIR_STEP_MS` | `450` | How much each clear shaves off the beat |
+| `HUDDLE_CHAIR_VERDICT_MS` | `2400` | How long YOURS / TAKEN stays on screen |
 | `HUDDLE_AIM_OFFSET_DEG` | `0` | Room-wide aim PHASE fix. Every aim landing on the person opposite the one you point at is a constant error — set 180 |
 | `HUDDLE_AIM_INVERT` | off | Set to `1` for a HANDEDNESS error: point left and you hit right. The error is 2×angle from centre, so the offset above can never fix it |
 

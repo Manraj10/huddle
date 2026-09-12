@@ -215,3 +215,25 @@ export function aimDue(last, angle, sinceMs, { minGap = 50, beat = 250, epsilon 
   const moved = Math.abs(Math.atan2(Math.sin(angle - last), Math.cos(angle - last)));
   return moved >= epsilon || sinceMs >= beat;
 }
+
+/**
+ * Where a phone is pointing, IN THE ROOM'S FRAME, for a player sitting at `mySeat`.
+ *
+ * aimAngle above answers "how far from where I started" — a private, per-player frame. The server
+ * resolves aims against the room, so handing it a private frame meant every player sent the same
+ * angle no matter where they were sitting, and three of four aims at a square table landed on the
+ * wrong human. That bug is invisible in a one-player test and invisible in a two-player test where
+ * the only other person is opposite you.
+ *
+ * The anchor is the seat the player just declared. When you drag your dot you are LOOKING at the
+ * phone, so its top edge points away from you — across the table — which is the direction
+ * mySeat + pi. Everything you point at afterwards is measured from there.
+ *
+ * That anchor is an assumption about how people hold phones. It is a very safe one, it is the only
+ * moment in the game where we know what someone is doing, and re-dragging your dot re-takes it.
+ */
+export function aimFromSeat(mySeat, yawNow, yawRef, invert = false) {
+  const turned = wrapDeg(yawNow - yawRef) * Math.PI / 180 * (invert ? -1 : 1);
+  const a = mySeat + Math.PI - turned;
+  return Math.atan2(Math.sin(a), Math.cos(a));
+}

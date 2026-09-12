@@ -311,7 +311,7 @@ function draw() {
     ctx.fillText((left / 1000).toFixed(1), cx, cy - 8);
     ctx.font = "700 11px ui-sans-serif, system-ui";
     ctx.fillStyle = "#8d97ab";
-    ctx.fillText("FUSE", cx, cy + 22);
+    ctx.fillText(v.strap && /CLAIM/i.test(v.strap) ? "BEAT" : "FUSE", cx, cy + 22);
   }
 
   // Flash: the whole table goes white on the shared clock
@@ -388,11 +388,28 @@ function draw() {
     const holder = v.map?.holder;
     const flight = v.map?.flight;
 
-    // The fuse ring and its number are already drawn above, off the same deadline.
+    // The fuse/beat ring and its number are already drawn above, off the same deadline.
+    // Verdict beats have no countdown — put the unique count in the table middle.
+    if (!v.countdownTo && (v.big != null || v.title)) {
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      if (v.big != null) {
+        ctx.fillStyle = "#f2f5fa";
+        ctx.font = "800 44px ui-sans-serif, system-ui";
+        ctx.fillText(String(v.big), cx, cy - 8);
+      }
+      if (v.title) {
+        ctx.fillStyle = "#8d97ab";
+        ctx.font = "700 13px ui-sans-serif, system-ui";
+        ctx.fillText(String(v.title).toUpperCase(), cx, cy + (v.big != null ? 26 : 0));
+      }
+    }
 
     // Who is marked right now, so the audience can watch a person not know it.
     const markedBy = new Map();
     for (const a of v.aims || []) if (a.holder) markedBy.set(a.to, a.from);
+    const collide = new Set(v.map?.collide || []);
+    for (const a of v.aims || []) if (a.collide) collide.add(a.to);
 
     for (const a of v.aims || []) {
       const from = spot.get(a.from), to = spot.get(a.to);
@@ -401,15 +418,16 @@ function draw() {
       const len = Math.hypot(dx, dy) || 1;
       // Stop short of the target so the needle points AT a person rather than through them.
       const tipX = from.x + (dx / len) * (len - 26), tipY = from.y + (dy / len) * (len - 26);
+      const hot = a.holder || a.collide;
       ctx.beginPath();
       ctx.moveTo(from.x, from.y);
       ctx.lineTo(tipX, tipY);
-      ctx.strokeStyle = a.holder ? "rgba(255,90,78,.92)" : "rgba(140,160,200,.30)";
-      ctx.lineWidth = a.holder ? 3 : 1.5;
+      ctx.strokeStyle = hot ? "rgba(255,90,78,.92)" : "rgba(140,160,200,.30)";
+      ctx.lineWidth = hot ? 3 : 1.5;
       ctx.stroke();
       ctx.beginPath();
-      ctx.arc(tipX, tipY, a.holder ? 5 : 3, 0, Math.PI * 2);
-      ctx.fillStyle = a.holder ? "#ff5a4e" : "rgba(140,160,200,.45)";
+      ctx.arc(tipX, tipY, hot ? 5 : 3, 0, Math.PI * 2);
+      ctx.fillStyle = hot ? "#ff5a4e" : "rgba(140,160,200,.45)";
       ctx.fill();
     }
 
@@ -441,12 +459,13 @@ function draw() {
       const pt = spot.get(q.id);
       const isHolder = q.id === holder;
       const isMarked = markedBy.get(q.id) != null;
+      const isCollide = collide.has(q.id);
       ctx.beginPath();
       ctx.arc(pt.x, pt.y, 16, 0, Math.PI * 2);
-      ctx.fillStyle = isHolder ? "#ff5a4e" : isMarked ? "#ffc857" : "#dce3f0";
+      ctx.fillStyle = isHolder || isCollide ? "#ff5a4e" : isMarked ? "#ffc857" : "#dce3f0";
       ctx.fill();
-      if (isMarked && !isHolder) {
-        ctx.strokeStyle = "rgba(255,200,87,.5)";
+      if ((isMarked && !isHolder) || isCollide) {
+        ctx.strokeStyle = isCollide ? "rgba(255,90,78,.55)" : "rgba(255,200,87,.5)";
         ctx.lineWidth = 9;
         ctx.stroke();
       }
@@ -459,8 +478,13 @@ function draw() {
       const halfText = ctx.measureText(nm).width / 2 + 4;
       ctx.fillText(nm, Math.min(w - halfText, Math.max(halfText, label.x)),
                    Math.min(h - 18, Math.max(12, label.y)));
-      // The audience is told what the player is not.
-      if (isMarked && !isHolder) {
+      // The audience is told what the player is not — or, in Chairs, who got double-claimed.
+      if (isCollide) {
+        ctx.fillStyle = "#ff5a4e";
+        ctx.font = "800 10px ui-sans-serif, system-ui";
+        ctx.fillText("TAKEN", Math.min(w - 46, Math.max(46, label.x)),
+                     Math.min(h - 5, Math.max(24, label.y + 14)));
+      } else if (isMarked && !isHolder) {
         ctx.fillStyle = "#ffc857";
         ctx.font = "800 10px ui-sans-serif, system-ui";
         ctx.fillText("DOESN'T KNOW", Math.min(w - 46, Math.max(46, label.x)),

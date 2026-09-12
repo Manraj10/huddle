@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { aimAngle, aimDue, smooth, stick, viewportYaw, worthSending, wrapDeg } from "../public/tilt.js";
+import { aimAngle, aimDue, aimFromSeat, smooth, stick, viewportYaw, worthSending, wrapDeg } from "../public/tilt.js";
 
 const near = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) < eps, `${a} !~ ${b}`);
 const deg2rad = (d) => d * Math.PI / 180;
@@ -202,4 +202,37 @@ test("the invert hatch fixes the bug the offset cannot", () => {
   // Not turning at all is identical either way — a handedness bug is invisible until you move,
   // which is exactly why it gets misread as "the offset is a bit off".
   near(aimAngle(0.4, ref, ref, true), aimAngle(0.4, ref, ref), 1e-12);
+});
+
+test("an aim is expressed in the ROOM's frame, not the player's own", () => {
+  // The bug this replaces: aimAngle answers "how far from where I started", which is private to
+  // one player. The server resolves against the room. So everyone sent the same angle wherever
+  // they sat, and at a square table three of four aims hit the wrong person.
+  const N = 4;
+  const seats = Array.from({ length: N }, (_, i) => (i / N) * 2 * Math.PI);
+  const ref = viewportYaw(0, 0);
+
+  // Nobody has turned since sitting down: every phone still points across the table.
+  for (const seat of seats) {
+    const aim = aimFromSeat(seat, ref, ref);
+    const across = Math.atan2(Math.sin(seat + Math.PI), Math.cos(seat + Math.PI));
+    near(aim, across, 1e-9);
+  }
+
+  // And two players at different seats holding phones the same way send DIFFERENT angles,
+  // which is the whole point.
+  assert.notEqual(aimFromSeat(seats[0], ref, ref).toFixed(6), aimFromSeat(seats[1], ref, ref).toFixed(6));
+});
+
+test("turning your body turns your aim, from wherever you are sitting", () => {
+  const seat = 1.2;
+  const ref = viewportYaw(40, 0);
+  const still = aimFromSeat(seat, ref, ref);
+  // A quarter turn moves the aim a quarter turn, in the room, not on the screen.
+  const turned = aimFromSeat(seat, viewportYaw(130, 0), ref);
+  near(Math.abs(Math.atan2(Math.sin(turned - still), Math.cos(turned - still))), Math.PI / 2, 1e-9);
+  // ...and the invert hatch still reverses the sense.
+  const flipped = aimFromSeat(seat, viewportYaw(130, 0), ref, true);
+  near(Math.atan2(Math.sin(flipped - still), Math.cos(flipped - still)),
+       -Math.atan2(Math.sin(turned - still), Math.cos(turned - still)), 1e-9);
 });
