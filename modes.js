@@ -610,12 +610,22 @@ export const MODES = {
   // Phones lie in a row in seat order. Each player has a ship on their own screen; a bullet
   // leaving your right edge enters your neighbour's left edge at the same height and speed. While
   // it crosses the real physical gap between the two phones it has an `arriveAt` and is filtered
-  // out of EVERY view, so it exists on the server and on nobody's screen. Say DUAL out loud when
-  // you demo this: Seabaa shipped the two-device version over Bluetooth in 2014. Ours is N
-  // players, no install, and the gap is cover rather than a timing detail.
+  // out of EVERY view, so it exists on the server and on nobody's screen.
+  //
+  // The lane index WRAPS. A row has two ends and needs a special case to stop shots falling off
+  // them; a table has no ends, so leaving the last phone's right edge enters the first phone's
+  // left edge — because those two people are sitting next to each other in real life. The seating
+  // of the actual humans is the topology of the world, which is the one claim in this project the
+  // prior-art search did not kill. It also means your own shot can come back round and hit you in
+  // the back, which is the moment worth demoing.
+  //
+  // Say the ancestors out loud: Seabaa's DUAL shipped the two-device version over Bluetooth in
+  // 2015, and Spatial Revenge on itch.io does the gyroscope and the dead zone between two Android
+  // phones. Both are two players in a straight line. Ours is N players in a closed ring at their
+  // real seat angles, in a browser, with nothing installed.
   duel: {
     name: "Duel", min: 2,
-    blurb: "Ships on every phone. Bullets cross the gaps between them, and the gaps are blind.",
+    blurb: "Ships on every phone. Shoot round the table — a bullet can come back and get you.",
     start(ctx) {
       const d = ctx.data;
       d.order = ctx.alive().slice().sort((a, b) => a.seat - b.seat).map((p) => p.id);
@@ -648,18 +658,17 @@ export const MODES = {
       const lane = d.order.indexOf(p.id);
       const dir = Number.isFinite(Number(msg.dir)) ? Number(msg.dir) : 0;
       let vx = Math.cos(dir), vy = Math.sin(dir);
-      // The two ends of the row have no neighbour on their outside, so their shots are turned
-      // inward instead of thrown off the table. With two phones this is just "you two, at each
-      // other", which is the demo.
-      const first = lane === 0, last = lane === d.order.length - 1;
-      if (first && vx < 0) vx = -vx;
-      if (last && !first && vx > 0) vx = -vx;
-      const inward = first ? 1 : last ? -1 : Math.sign(vx) || 1;
-      if (Math.abs(vx) < DUEL_MIN_VX) vx = inward * DUEL_MIN_VX;   // a shot that never leaves your
-      const len = Math.hypot(vx, vy) || 1;                          // screen is not this game
+      // There used to be a special case here turning the end players' shots back inward, because
+      // a row has two ends and a shot off the end of it goes nowhere. A table has no ends. The
+      // lane index wraps now, so every player has a neighbour on both sides and the special case
+      // is gone — along with the question of who counts as an end.
+      if (Math.abs(vx) < DUEL_MIN_VX) {               // a shot that never leaves your screen is
+        vx = (Math.sign(vx) || 1) * DUEL_MIN_VX;      // not this game
+      }
+      const len = Math.hypot(vx, vy) || 1;
       s.nextFire = now + DUEL_COOL;
       d.bullets.push({
-        id: d.nextBullet++, owner: p.id, lane,
+        id: d.nextBullet++, owner: p.id, lane, hops: 0,
         x: s.x + (vx / len) * 0.08, y: s.y + (vy / len) * 0.08,
         vx: (vx / len) * DUEL_SPEED, vy: (vy / len) * DUEL_SPEED,
         arriveAt: 0,
@@ -691,16 +700,22 @@ export const MODES = {
         if (b.y < 0) { b.y = -b.y; b.vy = -b.vy; }
         if (b.y > 1) { b.y = 2 - b.y; b.vy = -b.vy; }
         if (b.x > 1 || b.x < 0) {
-          const next = b.lane + (b.x > 1 ? 1 : -1);
-          if (next < 0 || next >= d.order.length) continue;        // off the end of the row
-          b.lane = next;
+          // The ring closes. Leaving the right edge of the last phone enters the left edge of the
+          // first, because those two people are sitting next to each other in real life — the
+          // seating of four actual humans is the topology of the world.
+          const n = d.order.length;
+          b.lane = (b.lane + (b.x > 1 ? 1 : -1) + n) % n;
+          b.hops++;
+          if (b.hops > n) continue;                   // it has been all the way round; let it go
           b.arriveAt = now + GAP;
           kept.push(b);
           continue;
         }
         const occupant = d.order[b.lane];
-        const target = occupant != null && occupant !== b.owner
-          ? ctx.alive().find((q) => q.id === occupant) : null;
+        // Your own shot can come back and get you, but only after it has crossed a gap — otherwise
+        // you would shoot yourself in the face on the frame you fired.
+        const canHit = occupant != null && (occupant !== b.owner || b.hops > 0);
+        const target = canHit ? ctx.alive().find((q) => q.id === occupant) : null;
         const s = target ? d.ship[occupant] : null;
         if (s && s.hp > 0 && Math.hypot(b.x - s.x, b.y - s.y) < DUEL_HIT) {
           s.hp--;
@@ -730,13 +745,15 @@ export const MODES = {
         if (b.lane !== lane) continue;               // on someone else's phone
         objects.push({ x: b.x, y: b.y, r: 0.02, c: b.owner === p.id ? "#8ef0b0" : "#ff6b5a", kind: "bullet" });
       }
-      const left = lane > 0 ? ctx.players().find((q) => q.id === d.order[lane - 1]) : null;
-      const right = lane < d.order.length - 1 ? ctx.players().find((q) => q.id === d.order[lane + 1]) : null;
+      const n = d.order.length;
+      const at = (i) => ctx.players().find((q) => q.id === d.order[((i % n) + n) % n]);
+      const left = n > 1 ? at(lane - 1) : null;
+      const right = n > 2 ? at(lane + 1) : null;      // with two phones both edges are each other
       return {
         kind: "arena",
         you: { x: s.x, y: s.y, hp: s.hp },
         objects,
-        edge: !left ? "right" : !right ? "left" : "both",
+        edge: "both",                               // no ends on a ring
         title: `${"|".repeat(s.hp)} ${s.hp} left`,
         sub: [left && `${left.name} ←`, right && `→ ${right.name}`].filter(Boolean).join("    "),
       };

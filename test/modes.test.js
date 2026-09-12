@@ -424,17 +424,82 @@ test("duel: lanes follow seat order, left to right", () => {
     ["BRAVO", "CHARLIE", "ALFA"]);
 });
 
-test("duel: the ends of the row are forced to fire inward", () => {
+test("duel: the table has no ends, so nobody's shot is turned round for them", () => {
+  // There used to be a special case reflecting the end players' shots back inward, because a row
+  // has ends and a shot off the end goes nowhere. Around a table there are no ends, so a shot
+  // leaves in the direction it was aimed, whoever fired it.
   const r = room(["ALFA", "BRAVO", "CHARLIE"], { seats: [0, 1, 2] }).play("duel");
   const d = r.data;
-  const [left, , right] = d.order.map((id) => r.players.find((p) => p.id === id));
+  const [first, , last] = d.order.map((id) => r.players.find((p) => p.id === id));
 
-  r.act(left.name, { a: "fire", dir: Math.PI });          // aimed off the left-hand end
-  assert.ok(d.bullets.at(-1).vx > 0, "the leftmost phone cannot shoot into nothing");
+  r.act(first.name, { a: "fire", dir: Math.PI });
+  assert.ok(d.bullets.at(-1).vx < 0, "aimed left, goes left, even from the first seat");
 
   r.advance(TUNING.GAP + 1000);
-  r.act(right.name, { a: "fire", dir: 0 });               // aimed off the right-hand end
-  assert.ok(d.bullets.at(-1).vx < 0, "and neither can the rightmost");
+  r.act(last.name, { a: "fire", dir: 0 });
+  assert.ok(d.bullets.at(-1).vx > 0, "aimed right, goes right, even from the last seat");
+});
+
+test("duel: a bullet goes all the way round the table and gets you in the back", () => {
+  // The seating of four real humans is the topology of the world: leaving the right edge of the
+  // last phone enters the left edge of the first, because those two people are sitting next to
+  // each other. Fire, and four seconds later your own shot arrives from the other side.
+  const r = room(["ALFA", "BRAVO", "CHARLIE", "DELTA"], { seats: [0, 1.5, 3, 4.5] }).play("duel");
+  const d = r.data;
+  const me = r.players.find((p) => p.id === d.order[0]);
+  // Everyone else ducks, so the shot is not stopped on the way round by a ship parked in the
+  // lane. What is being tested is the topology, not marksmanship.
+  for (const id of d.order.slice(1)) d.ship[id].y = 0.9;
+  const myHp = d.ship[me.id].hp;
+
+  r.act(me.name, { a: "fire", dir: 0 });
+  const shot = d.bullets.at(-1);
+  assert.equal(shot.hops, 0);
+  assert.equal(shot.lane, 0);
+
+  const lanes = new Set([0]);
+  for (let i = 0; i < 400; i++) {
+    r.advance(25);
+    r.tick();
+    const b = d.bullets.find((x) => x.id === shot.id);
+    if (!b) break;                                  // it landed, or it expired
+    lanes.add(b.lane);
+  }
+  assert.equal(lanes.size, 4, "it crossed every phone at the table");
+  assert.equal(d.ship[me.id].hp, myHp - 1, "and then it came back and hit the person who fired it");
+});
+
+test("duel: your own shot cannot hit you before it has left your phone", () => {
+  const r = room(["ALFA", "BRAVO", "CHARLIE"], { seats: [0, 2, 4] }).play("duel");
+  const d = r.data;
+  const me = r.players.find((p) => p.id === d.order[0]);
+  const before = d.ship[me.id].hp;
+  r.act(me.name, { a: "fire", dir: 0 });
+  // Park the shot right on top of the shooter, still on its home lane.
+  const b = d.bullets.at(-1);
+  b.x = d.ship[me.id].x; b.y = d.ship[me.id].y;
+  r.advance(25);
+  r.tick();
+  assert.equal(d.ship[me.id].hp, before, "hops is 0, so this is still your own muzzle");
+});
+
+test("duel: a shot that has been all the way round is spent, not immortal", () => {
+  // With the ring closed a bullet has no edge to fall off, so something has to end it or the
+  // arena fills up with lost shots for the rest of the round.
+  const r = room(["ALFA", "BRAVO"], { seats: [0, 3] }).play("duel");
+  const d = r.data;
+  const me = r.players.find((p) => p.id === d.order[0]);
+  d.ship[d.order[0]].y = 0.05;
+  d.ship[d.order[1]].y = 0.95;                    // keep both ships out of the flight path
+  r.act(me.name, { a: "fire", dir: 0 });
+  const id = d.bullets.at(-1).id;
+  let alive = true;
+  for (let i = 0; i < 600 && alive; i++) {
+    r.advance(25);
+    r.tick();
+    alive = d.bullets.some((x) => x.id === id);
+  }
+  assert.equal(alive, false, "it expires once it has been round");
 });
 
 test("duel: a shot straight up still crosses the screen", () => {
@@ -472,9 +537,8 @@ test("duel: the arena view is normalised 0-1 and knows which edges have a neighb
   const r = room(["ALFA", "BRAVO", "CHARLIE"], { seats: [0, 1, 2] }).play("duel");
   const d = r.data;
   const names = d.order.map((id) => r.players.find((p) => p.id === id).name);
-  assert.equal(r.view(names[0]).edge, "right");
-  assert.equal(r.view(names[1]).edge, "both");
-  assert.equal(r.view(names[2]).edge, "left");
+  // Every seat at a round table has a neighbour on both sides. Nobody is an end any more.
+  for (const n of names) assert.equal(r.view(n).edge, "both");
   const v = r.view(names[1]);
   assert.equal(v.kind, "arena");
   assert.ok(v.you.x >= 0 && v.you.x <= 1 && v.you.y >= 0 && v.you.y <= 1);

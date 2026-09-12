@@ -655,13 +655,16 @@ function drawArena() {
   // frame, which reads as a stutter rather than as a clock bug.
   const k = clamp01((serverNow() - (frames[1].at || 0)) / 100);
   const lerp = (a, b) => a + (b - a) * k;
-  if (cur.edge != null) {                            // the side the shot crosses to the next phone
+  if (cur.edge != null) {                            // the sides a shot crosses to another phone
+    // Around a table every player has a neighbour both ways, so "both" is the normal case and it
+    // has to light BOTH edges. It used to fall through a chain of else-ifs onto a catch-all that
+    // drew the bottom of the screen — the one edge nothing ever crosses.
     const side = String(cur.edge);
+    const left = side === "left" || side === "both";
+    const right = side === "right" || side === "both";
     actx.fillStyle = "#ffffff2e";
-    if (side === "left") actx.fillRect(0, 0, 4, H);
-    else if (side === "right") actx.fillRect(W - 4, 0, 4, H);
-    else if (side === "top") actx.fillRect(0, 0, W, 4);
-    else actx.fillRect(0, H - 4, W, 4);
+    if (left) actx.fillRect(0, 0, 4, H);
+    if (right) actx.fillRect(W - 4, 0, 4, H);
   }
   for (let i = 0; i < (cur.objects || []).length; i++) {
     const o = cur.objects[i], q = prev.objects?.[i] || o;
