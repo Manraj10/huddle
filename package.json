@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "check": "node deploy/smoke.mjs && node deploy/roomcheck.mjs"
   },
   "keywords": [],
   "author": "",
