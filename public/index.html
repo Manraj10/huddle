@@ -369,6 +369,14 @@ const buzz = (ms) => navigator.vibrate?.(ms);
 // declare where its ship is could declare that it is standing on top of yours.
 let tilt = null, tiltWhy = null, tiltSent = 0, seatYaw = null;
 
+/** Who this angle would actually reach, using the same arithmetic the server will use. */
+function whoIsAt(angle) {
+  const meId = myId();
+  const others = (S?.players || []).filter((q) => q.alive && q.id !== meId);
+  if (!others.length) return null;
+  return nearest(others, { id: meId }, angle);
+}
+
 /**
  * A swipe, turned into a direction in the room rather than a direction on a screen.
  *
@@ -380,14 +388,6 @@ let tilt = null, tiltWhy = null, tiltSent = 0, seatYaw = null;
  * Falls back to the raw screen angle whenever there is no yaw to work with, which is what this
  * has always done and is exactly right for a laptop or a phone that refused the sensor.
  */
-/** Who this angle would actually reach, using the same arithmetic the server will use. */
-function whoIsAt(angle) {
-  const meId = myId();
-  const others = (S?.players || []).filter((q) => q.alive && q.id !== meId);
-  if (!others.length) return null;
-  return nearest(others, { id: meId }, angle);
-}
-
 function aimFor(screenAngle) {
   const yaw = tilt?.yaw();
   if (yaw == null || seatYaw == null) return screenAngle;
