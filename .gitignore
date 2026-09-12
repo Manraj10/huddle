@@ -6,3 +6,5 @@ tunnel.log
 *.bak.html
 data/*.json
 _probe.mjs
+.env
+data/

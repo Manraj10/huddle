@@ -19,6 +19,10 @@
 //   - It never throws, and the caller never awaits it before pushing state.
 //
 // Set GEMINI_API_KEY or XAI_API_KEY. Nothing else changes.
+//
+// Or point it at ANY OpenAI-compatible endpoint with HUDDLE_LLM_BASE_URL — that covers IFM's K2
+// through their inference partners, a Grok key from the SpaceXAI table, a vLLM or SGLang server on
+// a laptop, or anything else a sponsor hands over. Checked first, so it wins when set.
 
 const TIMEOUT_MS = Number(process.env.HUDDLE_CALL_TIMEOUT_MS) || 2500;
 const COOLDOWN_MS = Number(process.env.HUDDLE_CALL_COOLDOWN_MS) || 4000;
@@ -27,7 +31,8 @@ const MAX_CHARS = 120;
 let lastCallAt = 0;
 let inFlight = false;
 
-export const enabled = () => !!(process.env.GEMINI_API_KEY || process.env.XAI_API_KEY);
+export const enabled = () =>
+  !!(process.env.HUDDLE_LLM_BASE_URL || process.env.GEMINI_API_KEY || process.env.XAI_API_KEY);
 
 /** The one thing we ask for, and the guard rails around what comes back. */
 const SYSTEM = [
@@ -61,6 +66,29 @@ async function ask(prompt) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   try {
+    // Any OpenAI-compatible endpoint. One env var and a sponsor's key is live.
+    if (process.env.HUDDLE_LLM_BASE_URL) {
+      const base = process.env.HUDDLE_LLM_BASE_URL.replace(/\/+$/, "");
+      const r = await fetch(`${base}/chat/completions`, {
+        method: "POST",
+        signal: ctrl.signal,
+        headers: {
+          "content-type": "application/json",
+          // A local vLLM or SGLang server wants no key; a hosted one does.
+          ...(process.env.HUDDLE_LLM_KEY ? { authorization: `Bearer ${process.env.HUDDLE_LLM_KEY}` } : {}),
+        },
+        body: JSON.stringify({
+          model: process.env.HUDDLE_LLM_MODEL || "IFM/K2-Horizon-0.9B",
+          max_tokens: 60,
+          temperature: 1,
+          messages: [{ role: "system", content: SYSTEM }, { role: "user", content: prompt }],
+        }),
+      });
+      if (!r.ok) return null;
+      const j = await r.json();
+      // K2 returns its thinking in reasoning_content and the line itself in content.
+      return j?.choices?.[0]?.message?.content ?? null;
+    }
     if (process.env.GEMINI_API_KEY) {
       const model = process.env.HUDDLE_GEMINI_MODEL || "gemini-2.5-flash";
       const r = await fetch(
