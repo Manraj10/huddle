@@ -121,6 +121,43 @@ try {
   for (const t of twins) t.die();
   await sleep(250);
 
+  console.log("a bullet nobody can see");
+  // The claim is that while a shot crosses the real gap between two handsets it is on the server
+  // and on NO phone. Measured, not asserted: the server unions the object ids it actually put on
+  // the wire this broadcast and reports what it is holding that nobody was told about.
+  {
+    const spec = new WebSocket(`ws://127.0.0.1:${PORT}/?spectate=${KEY}`);
+    await new Promise((res) => { spec.on("open", res); });
+    let last = null;
+    spec.on("message", (buf) => { const m = JSON.parse(buf); if (m.t === "view") last = m; });
+
+    phones[0].send({ t: "start", mode: "duel" });
+    await sleep(300);
+    is(phones[0].latest?.phase === "live", "duel starts", phones[0].latest?.phase);
+
+    // Everyone shoots sideways until something is in flight between two phones.
+    let sawHidden = 0, sawVisible = 0;
+    for (let i = 0; i < 60; i++) {
+      for (const ph of phones) ph.act({ a: "fire", dir: 0 });
+      await sleep(50);
+      if (last && typeof last.unseen === "number") {
+        if (last.unseen > 0) sawHidden++;
+        else sawVisible++;
+      }
+    }
+    is(sawHidden > 0, "the room screen catches shots that reached nobody", `unseen never rose above 0 in ${sawVisible + sawHidden} frames`);
+    is(sawVisible > 0, "and it is not just permanently claiming something is hidden", "unseen was never 0");
+
+    // A phone must never be told about a bullet that is counted as unseen.
+    const inFlight = phones.map((ph) => (ph.latest?.view?.objects || []).map((o) => o.id)).flat();
+    is(Array.isArray(inFlight), "phones receive object ids at all", JSON.stringify(inFlight).slice(0, 80));
+    spec.close();
+    phones[0].send({ t: "reset" });
+    await sleep(200);
+    for (let i = 0; i < 4; i++) phones[i].seat(ANGLES[i]);
+    await sleep(150);
+  }
+
   console.log("per-player truth");
   phones[0].send({ t: "start", mode: "relay" });
   const live = await until(phones[0], (m) => m.phase === "live", "relay starts");

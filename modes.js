@@ -743,7 +743,7 @@ export const MODES = {
       for (const b of d.bullets) {
         if (b.arriveAt) continue;                    // between two phones: on nobody's screen
         if (b.lane !== lane) continue;               // on someone else's phone
-        objects.push({ x: b.x, y: b.y, r: 0.02, c: b.owner === p.id ? "#8ef0b0" : "#ff6b5a", kind: "bullet" });
+        objects.push({ id: b.id, x: b.x, y: b.y, r: 0.02, c: b.owner === p.id ? "#8ef0b0" : "#ff6b5a", kind: "bullet" });
       }
       const n = d.order.length;
       const at = (i) => ctx.players().find((q) => q.id === d.order[((i % n) + n) % n]);
@@ -758,6 +758,12 @@ export const MODES = {
         sub: [left && `${left.name} ←`, right && `→ ${right.name}`].filter(Boolean).join("    "),
       };
     },
+    /**
+     * Every object this mode believes exists right now. The server diffs it against the ids it
+     * actually put on the wire, so "on nobody's screen" stops being a claim about the design and
+     * becomes a measurement of the frames we really sent.
+     */
+    census(ctx) { return (ctx.data.bullets || []).map((b) => b.id); },
     spectate(ctx) {
       const d = ctx.data;
       const name = (id) => ctx.players().find((q) => q.id === id)?.name ?? "—";

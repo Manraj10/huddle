@@ -22,6 +22,8 @@
   aside { border-left:1px solid var(--line); padding:18px 18px 12px; display:flex; flex-direction:column;
     align-items:center; gap:10px; min-height:0; overflow:auto; }
   #qr { padding:10px; background:#fff; border-radius:12px; }
+  #unseen-wrap { color:#ffc857; }
+  #unseen-wrap b { color:#ffc857; }
   #qr img, #qr canvas { display:block; }
   .url { font-size:13px; font-weight:700; word-break:break-all; text-align:center; color:var(--ink);
     max-width:28ch; }
@@ -70,6 +72,7 @@
     <span><b id="n-rounds">0</b> rounds</span>
     <span><b id="n-people">0</b> people</span>
     <span><b id="n-fast">—</b> fastest</span>
+    <span id="unseen-wrap" hidden><b id="n-unseen">0</b> on nobody's screen</span>
   </div>
   <div class="caption" id="cap"></div>
   <div class="caption" id="seatnotice" hidden style="color:#ffc857;font-weight:800"></div>
@@ -195,6 +198,12 @@ function paintChrome() {
   document.getElementById("n-rounds").textContent = t.rounds;
   document.getElementById("n-people").textContent = t.people;
   document.getElementById("n-fast").textContent = t.bestReactionMs != null ? `${t.bestReactionMs}ms` : "—";
+  // Counted by the server from the ids it actually put on the wire this broadcast, so a shot
+  // crossing the real gap between two handsets is a number a judge can watch rise and fall
+  // rather than a claim in a pitch. This screen is the only client allowed to know.
+  const unseen = S.unseen || 0;
+  document.getElementById("unseen-wrap").hidden = !unseen;
+  document.getElementById("n-unseen").textContent = unseen;
   const holder = S.view?.map?.holder;
   const list = document.getElementById("plist");
   const noticeEl = document.getElementById("seatnotice");

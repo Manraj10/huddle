@@ -176,12 +176,23 @@ function push() {
     modes: Object.entries(MODES).map(([k, v]) => ({ key: k, name: v.name, min: v.min, blurb: v.blurb })),
     players: players().map((p) => ({ id: p.id, name: p.name, alive: p.alive, score: p.score, seat: p.seat, placed: !!p.placed })),
   };
+  // Everything that reached ANY phone this broadcast. Collected from the views we actually
+  // serialise, not from a parallel bookkeeping copy that could quietly disagree with them.
+  const shipped = new Set();
   for (const p of players()) {
     if (p.gone) continue;
-    send(p.ws, { ...base, you: { id: p.id, alive: p.alive, score: p.score }, view: viewFor(p) });
+    const view = viewFor(p);
+    for (const o of view.objects || []) if (o.id != null) shipped.add(o.id);
+    send(p.ws, { ...base, you: { id: p.id, alive: p.alive, score: p.score }, view });
   }
+  // The difference between what the server believes exists and what any phone was told about.
+  // A bullet crossing the real gap between two handsets is in here, which is what makes "it is on
+  // nobody's screen" checkable in front of a judge rather than a sentence in a pitch.
+  const unseen = room.phase === "live" && m.census
+    ? m.census(ctx).filter((id) => !shipped.has(id)).length
+    : 0;
   const spec = {
-    ...base, spectator: true, ticker: stats.ticker(),
+    ...base, spectator: true, ticker: stats.ticker(), unseen,
     view: room.phase === "live" ? m.spectate(ctx) : lobbyView(null),
   };
   for (const ws of spectators) send(ws, spec);
