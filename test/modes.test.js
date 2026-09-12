@@ -637,6 +637,36 @@ test("duel: the arena asks the phone for the sensor, and nothing else does", () 
   assert.ok(!blind.view("BRAVO").wantsTilt);
 });
 
+test("duel: no two ships start on the same line", () => {
+  // A bullet leaves one phone and enters the next at the same height. When every ship spawned at
+  // y 0.5, a shot fired straight ahead on the first frame arrived dead-centre on the neighbour
+  // every time — four players firing wiped the round inside a second, before anyone had tilted.
+  const r = room(["ALFA", "BRAVO", "CHARLIE", "DELTA"], { seats: [0, 1.5, 3, 4.5] }).play("duel");
+  const ys = r.data.order.map((id) => r.data.ship[id].y);
+  assert.equal(new Set(ys).size, ys.length, "every ship has its own height");
+  for (const y of ys) assert.ok(y > 0.05 && y < 0.95, `${y} is off the screen`);
+  // and a straight shot from the first seat does not simply land on the second
+  const me = r.players.find((p) => p.id === r.data.order[0]);
+  r.act(me.name, { a: "fire", dir: 0 });
+  const b = r.data.bullets.at(-1);
+  assert.ok(Math.abs(b.y - r.data.ship[r.data.order[1]].y) > 0.05, "not aimed straight at them");
+});
+
+test("duel: a shot that comes back round says so, and does not say it wrong", () => {
+  // The old message subtracted lane indices, which is 0 for a bullet that went all the way round
+  // — so the best moment in the game announced itself as "CHARLIE got CHARLIE across 0 phones".
+  const r = room(["ALFA", "BRAVO", "CHARLIE", "DELTA"], { seats: [0, 1.5, 3, 4.5] }).play("duel");
+  const d = r.data;
+  const me = r.players.find((p) => p.id === d.order[0]);
+  for (const id of d.order.slice(1)) d.ship[id].y = 0.97;    // everyone else ducks
+  d.ship[me.id].hp = 1;
+  r.act(me.name, { a: "fire", dir: 0 });
+  for (let i = 0; i < 400 && !r.log.eliminated.length; i++) { r.advance(25); r.tick(); }
+  assert.equal(r.log.eliminated.at(-1)?.name, "ALFA", "their own shot got them");
+  assert.match(r.log.eliminated.at(-1).why, /all the way round/);
+  assert.doesNotMatch(r.log.eliminated.at(-1).why, /0 phones/);
+});
+
 test("duel: an unflown ship cannot win by standing still once its phone has gone", () => {
   const r = room(["ALFA", "BRAVO"], { seats: [0, 3] }).play("duel");
   r.drop("BRAVO");

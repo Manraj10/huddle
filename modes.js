@@ -822,7 +822,18 @@ export const MODES = {
       const d = ctx.data;
       d.order = ctx.alive().slice().sort((a, b) => a.seat - b.seat).map((p) => p.id);
       d.ship = {};
-      for (const id of d.order) d.ship[id] = { x: 0.5, y: 0.5, tx: 0, ty: 0, hp: DUEL_HP, nextFire: 0 };
+      // Staggered down the screen, never all on one line. Every ship used to spawn at exactly
+      // (0.5, 0.5), and a bullet leaves one phone and enters the next at the SAME height — so a
+      // shot fired straight ahead on the first frame arrived dead-centre on the neighbour every
+      // single time. Four players firing took the whole round out inside a second, before anyone
+      // had tilted anything.
+      const n = d.order.length;
+      d.order.forEach((id, i) => {
+        d.ship[id] = {
+          x: 0.5, y: n < 2 ? 0.5 : 0.24 + 0.52 * (i / (n - 1)),
+          tx: 0, ty: 0, hp: DUEL_HP, nextFire: 0,
+        };
+      });
       d.bullets = [];
       d.nextBullet = 1;
       d.last = ctx.now();
@@ -932,7 +943,14 @@ export const MODES = {
           s.hp--;
           if (s.hp <= 0) {
             const shooter = ctx.players().find((q) => q.id === b.owner);
-            ctx.eliminate(target, `${shooter?.name ?? "someone"} got ${target.name} across ${Math.abs(b.lane - d.order.indexOf(b.owner))} phone${Math.abs(b.lane - d.order.indexOf(b.owner)) === 1 ? "" : "s"}`);
+            // hops is how many gaps it actually crossed. The old line subtracted lane indices,
+            // which is 0 for a shot that went all the way round the table and came back — so the
+            // best moment in the game announced itself as "CHARLIE got CHARLIE across 0 phones".
+            const gaps = b.hops || 0;
+            const how = gaps === 1 ? "across the gap" : `across ${gaps} phones`;
+            ctx.eliminate(target, b.owner === target.id
+              ? `${target.name} went all the way round and shot themselves in the back`
+              : `${shooter?.name ?? "someone"} got ${target.name} ${gaps ? how : "point blank"}`);
             d.bullets = kept;
             return true;
           }

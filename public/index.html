@@ -837,16 +837,36 @@ function drawRing(list) {
 }
 
 // ---- arena renderer (Duel) ---------------------------------------------------------
-// Lane 1: this is the shape I built to. Coordinates normalised 0-1 inside your own screen,
-// objects interpolated between broadcasts so a slow network still looks like 60fps.
+// Coordinates are normalised 0-1 inside your own screen. The server owns every position; this
+// only draws, and interpolates between broadcasts so a 20Hz feed still looks like 60fps.
+//
+// The whole point of this mode is that your screen is one panel of a board made of everybody's
+// phones, so the two things that have to read instantly are WHERE THE EDGES ARE and WHO IS ON THE
+// OTHER SIDE of them. A shot leaving the right edge is not leaving the game, it is arriving on the
+// phone of the person sitting to your right — and for a moment in between it is on nobody's
+// screen at all.
+//
 // Drag sends {t:'act', a:'move', x, y}; a tap sends {t:'act', a:'fire', dir} where dir is the
-// angle from your ship to where you tapped.
+// angle from your ship to where you tapped. Tilt sends {t:'act', a:'tilt', x, y}.
 const arena = $("arena"), actx = arena.getContext("2d");
 let frames = [null, null];
 function feedArena(v) {
   const last = frames[1];
   if (!last || last.at !== (S.now || 0)) frames = [last || { v, at: S.now }, { v, at: S.now || Date.now() }];
 }
+
+/** Neighbour names, as the mode sends them: "BRAVO \u2190    \u2192 CHARLIE". */
+function neighbours(sub) {
+  const out = { left: "", right: "" };
+  for (const part of String(sub || "").split(/\s{2,}/)) {
+    const t = part.trim();
+    if (!t) continue;
+    if (t.includes("\u2190")) out.left = t.replace("\u2190", "").trim();
+    else if (t.includes("\u2192")) out.right = t.replace("\u2192", "").trim();
+  }
+  return out;
+}
+
 function drawArena() {
   const cur = frames[1]?.v, prev = frames[0]?.v || cur;
   if (!cur) return;
@@ -854,33 +874,103 @@ function drawArena() {
   if (arena.width !== W * dpr) { arena.width = W * dpr; arena.height = H * dpr; }
   actx.setTransform(dpr, 0, 0, dpr, 0, 0);
   actx.clearRect(0, 0, W, H);
-  // Against the SYNCED clock, not the local one: frames are stamped with the server's time,
-  // and a phone whose clock is a minute off otherwise pins k at 1 and loses every interpolated
-  // frame, which reads as a stutter rather than as a clock bug.
+
+  // Against the SYNCED clock, not the local one: frames are stamped with the server's time, and a
+  // phone whose clock is off otherwise pins this at 1 and throws away every interpolated frame,
+  // which reads as a stutter rather than as a clock bug.
   const k = clamp01((serverNow() - (frames[1].at || 0)) / 100);
   const lerp = (a, b) => a + (b - a) * k;
-  if (cur.edge != null) {                            // the sides a shot crosses to another phone
-    // Around a table every player has a neighbour both ways, so "both" is the normal case and it
-    // has to light BOTH edges. It used to fall through a chain of else-ifs onto a catch-all that
-    // drew the bottom of the screen — the one edge nothing ever crosses.
-    const side = String(cur.edge);
-    const left = side === "left" || side === "both";
-    const right = side === "right" || side === "both";
-    actx.fillStyle = "#ffffff2e";
-    if (left) actx.fillRect(0, 0, 4, H);
-    if (right) actx.fillRect(W - 4, 0, 4, H);
+
+  // Interpolate by ID. Matching by array index made every bullet inherit a different bullet's
+  // previous position the moment one was spawned or spent, so shots visibly teleported sideways.
+  const was = new Map();
+  for (const o of prev.objects || []) if (o.id != null) was.set(o.id, o);
+
+  const side = String(cur.edge ?? "");
+  const hasLeft = side === "left" || side === "both";
+  const hasRight = side === "right" || side === "both";
+  const near = { left: 0, right: 0 };
+  for (const o of cur.objects || []) {
+    if (o.kind !== "bullet") continue;
+    near.left = Math.max(near.left, clamp01(1 - o.x / 0.16));
+    near.right = Math.max(near.right, clamp01(1 - (1 - o.x) / 0.16));
   }
-  for (let i = 0; i < (cur.objects || []).length; i++) {
-    const o = cur.objects[i], q = prev.objects?.[i] || o;
+
+  // ---- the edges: the seam between your phone and the next person's --------------------
+  const nb = neighbours(cur.sub);
+  const edge = (x0, w, glow, label, dir) => {
+    const g = actx.createLinearGradient(dir > 0 ? x0 : x0 + w, 0, dir > 0 ? x0 + w : x0, 0);
+    g.addColorStop(0, `rgba(255,255,255,${0.05 + glow * 0.34})`);
+    g.addColorStop(1, "rgba(255,255,255,0)");
+    actx.fillStyle = g;
+    actx.fillRect(x0, 0, w, H);
+    actx.fillStyle = `rgba(255,255,255,${0.24 + glow * 0.7})`;
+    actx.fillRect(dir > 0 ? x0 : x0 + w - 3, 0, 3, H);
+    if (!label) return;
+    actx.save();
+    actx.translate(dir > 0 ? 19 : W - 19, H / 2);
+    actx.rotate(dir > 0 ? -Math.PI / 2 : Math.PI / 2);
+    actx.fillStyle = `rgba(244,246,251,${0.4 + glow * 0.5})`;
+    actx.font = "700 12px ui-sans-serif, system-ui";
+    actx.textAlign = "center";
+    actx.textBaseline = "middle";
+    actx.fillText(label.toUpperCase(), 0, 0);
+    actx.restore();
+  };
+  if (hasLeft) edge(0, W * 0.14, near.left, nb.left, 1);
+  if (hasRight) edge(W * 0.86, W * 0.14, near.right, nb.right, -1);
+
+  // ---- bullets, with a trail so you can read direction at a glance ---------------------
+  for (const o of cur.objects || []) {
+    const q = (o.id != null && was.get(o.id)) || o;
+    const x = lerp(q.x, o.x) * W, y = lerp(q.y, o.y) * H;
+    const r = (o.r || 0.03) * W;
+    const tx = (q.x - o.x) * W, ty = (q.y - o.y) * H;
+    if (Math.hypot(tx, ty) > 0.5) {
+      const g = actx.createLinearGradient(x, y, x + tx * 6, y + ty * 6);
+      g.addColorStop(0, o.c || "#f4f6fb");
+      g.addColorStop(1, "transparent");
+      actx.strokeStyle = g;
+      actx.lineWidth = r * 1.5;
+      actx.lineCap = "round";
+      actx.beginPath();
+      actx.moveTo(x, y);
+      actx.lineTo(x + tx * 6, y + ty * 6);
+      actx.stroke();
+    }
     actx.beginPath();
-    actx.arc(lerp(q.x, o.x) * W, lerp(q.y, o.y) * H, (o.r || 0.03) * W, 0, 7);
+    actx.arc(x, y, r, 0, 7);
     actx.fillStyle = o.c || "#f4f6fb";
+    actx.shadowColor = o.c || "#f4f6fb";
+    actx.shadowBlur = 14;
     actx.fill();
+    actx.shadowBlur = 0;
   }
+
+  // ---- your ship ----------------------------------------------------------------------
   if (cur.you) {
+    const x = cur.you.x * W, y = cur.you.y * H, r = 0.052 * W;
     actx.beginPath();
-    actx.arc(cur.you.x * W, cur.you.y * H, 0.045 * W, 0, 7);
-    actx.fillStyle = "#ff7a3c"; actx.fill();
+    actx.arc(x, y, r, 0, 7);
+    actx.fillStyle = "#ff7a3c";
+    actx.shadowColor = "#ff7a3c";
+    actx.shadowBlur = 26;
+    actx.fill();
+    actx.shadowBlur = 0;
+    actx.beginPath();
+    actx.arc(x, y, r + 5, 0, 7);
+    actx.strokeStyle = "#ffffff66";
+    actx.lineWidth = 2;
+    actx.stroke();
+
+    // Health, as pips. The hero is hidden in an arena, so this is the only place it can live —
+    // and pips read from across a table where a number does not.
+    const hp = Math.max(0, cur.you.hp | 0);
+    const pipW = 26, gap = 7, total = hp * pipW + (hp - 1) * gap;
+    for (let i = 0; i < hp; i++) {
+      actx.fillStyle = hp > 1 ? "#8ef0b0" : "#ff5a4e";
+      actx.fillRect(W / 2 - total / 2 + i * (pipW + gap), 46, pipW, 5);
+    }
   }
 }
 arena.addEventListener("pointermove", (e) => {
