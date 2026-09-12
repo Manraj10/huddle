@@ -2,10 +2,24 @@
 
 Party games that live across everyone's phones. One link, one room, no install.
 
-The engine sends **every player a different view of the same room**. That is what makes
-hidden-information games possible: in Blindside only the person holding the bomb can see it, and
-everyone else genuinely cannot. Games are server-side only — the phones render whatever view they
-are handed, so a new game is about 40 lines in `modes.js` and zero client code.
+Huddle is an engine for social party games where the room itself becomes the mechanic. Every player
+gets a different view of the same room, so hidden information is enforced by the authoritative server
+instead of leaked by the client. In Blindside, only the person holding the bomb can see it; everyone
+else sees a room that looks normal, while the room screen keeps the truth.
+
+## Pitch in 30 seconds
+
+Huddle is a room-native party-game engine built for walk-up play: no install, no account, and no
+friction. The product is not "a game on a phone" — it is a shared social space where every player is
+seeing a different slice of the same truth. That creates tension, bluffing, reaction timing, and
+real physical attention in a way that a generic online game never can.
+
+## Judge-facing docs
+
+- [PITCH.md](./PITCH.md) — the 3-minute demo script, product framing, and judge narrative
+- [docs/README.md](./docs/README.md) — the operational runbook for judging, backup, and submission
+- [docs/submission-checklist.md](./docs/submission-checklist.md) — the Google Form, MLH questions, and backup-video checklist
+- [docs/prizes.md](./docs/prizes.md) — the prize paths that fit the product and the ones to avoid
 
 ## Games
 
