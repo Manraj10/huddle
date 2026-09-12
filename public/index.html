@@ -40,10 +40,14 @@
   .scores .out { opacity:.35; text-decoration:line-through; }
   .notice { position:fixed; bottom:0; left:0; right:0; padding:14px; text-align:center;
             font-size:14px; font-weight:600; color:var(--dim); }
+  .reset { position:fixed; top:6px; right:8px; z-index:5; background:#161d2b; color:#7d879b;
+           border:1px solid #2b3345; border-radius:999px; padding:7px 12px; margin:0;
+           font-size:12px; font-weight:800; letter-spacing:.1em; }
   .warn { position:fixed; top:8px; left:50%; transform:translateX(-50%); background:#3a2a10; color:#ffc857;
           padding:5px 12px; border-radius:999px; font-size:12px; font-weight:700; letter-spacing:.08em; }
 </style>
 
+<button class="reset" id="reset" title="back to lobby">RESET</button>
 <div id="app"></div>
 <div class="ring" id="ring"></div>
 <div class="scores" id="scores"></div>
@@ -92,6 +96,12 @@ const buzz = (ms) => navigator.vibrate && navigator.vibrate(ms);
 
 // ---- input ----
 let down = null;
+$("reset").addEventListener("pointerdown", (e) => e.stopPropagation());
+$("reset").addEventListener("pointerup", (e) => e.stopPropagation());
+$("reset").onclick = () => {
+  ws?.send(JSON.stringify({ t: "reset" }));
+  ws?.send(JSON.stringify({ t: "kickGhosts" }));
+};
 addEventListener("pointerdown", (e) => { down = { x: e.clientX, y: e.clientY }; });
 addEventListener("pointercancel", () => { down = null; });
 addEventListener("pointerup", (e) => {

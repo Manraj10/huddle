@@ -174,6 +174,18 @@ wss.on("connection", (ws, req) => {
     }
     if (!me) return;
     if (msg.t === "start") return startGame(msg.mode);
+    if (msg.t === "reset") {
+      clearTimeout(gapTimer);
+      room.phase = "lobby"; room.data = {}; room.winner = null; room.notice = "room reset";
+      for (const p of players()) { p.alive = true; p.score = 0; }
+      lastChange = now();
+      return push();
+    }
+    if (msg.t === "kickGhosts") {          // drop anyone whose socket is gone, right now
+      for (const p of players()) if (p.gone || p.ws.readyState !== 1) room.players.delete(p.id);
+      seats(); room.notice = "cleared";
+      return push();
+    }
     if (msg.t === "act" && room.phase === "live" && me.alive) {
       if (mode().act(ctx, me, msg)) push();
     }
