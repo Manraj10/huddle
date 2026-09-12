@@ -445,6 +445,7 @@ addEventListener("pointercancel", () => { down = null; aiming = null; });
 // turning your body changes who you are pointing at — the entire claim, felt rather than read.
 addEventListener("pointermove", (e) => {
   if (!down || !joined || !S || S.phase !== "live" || onScreen !== "play") return;
+  if (!S.you?.alive) return;                              // a throw you cannot make must not be previewed
   if (S.view?.kind === "arena") return;                   // an arena aims inside its own screen
   const dx = e.clientX - down.x, dy = e.clientY - down.y;
   if (Math.hypot(dx, dy) <= 38) { aiming = null; return; }
