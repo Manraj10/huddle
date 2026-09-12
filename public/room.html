@@ -37,6 +37,7 @@
     font-size:13px; color:var(--dim); display:flex; gap:22px; flex-wrap:wrap; }
   .tick b { color:var(--ink); font-size:18px; letter-spacing:0; }
   .caption { color:var(--dim); font-size:13px; font-weight:500; }
+  #strap { flex-basis:100%; order:3; text-align:center; padding-top:2px; }
   #boom { position:fixed; inset:0; display:grid; place-items:center; pointer-events:none;
     background:rgba(7,9,15,.72); opacity:0; transition:opacity .12s linear; z-index:5; }
   #boom.on { opacity:1; }
@@ -74,6 +75,7 @@
     <span><b id="n-fast">—</b> fastest</span>
     <span id="unseen-wrap" hidden><b id="n-unseen">0</b> on nobody's screen</span>
   </div>
+  <div class="caption" id="strap" hidden style="color:#ffc857;font-weight:800;letter-spacing:.08em"></div>
   <div class="caption" id="cap"></div>
   <div class="caption" id="seatnotice" hidden style="color:#ffc857;font-weight:800"></div>
 </footer>
@@ -201,6 +203,10 @@ function paintChrome() {
   // Counted by the server from the ids it actually put on the wire this broadcast, so a shot
   // crossing the real gap between two handsets is a number a judge can watch rise and fall
   // rather than a claim in a pitch. This screen is the only client allowed to know.
+  const strapEl = document.getElementById("strap");
+  const strap = S.view?.strap;
+  strapEl.textContent = strap || "";
+  strapEl.hidden = !strap;
   const unseen = S.unseen || 0;
   document.getElementById("unseen-wrap").hidden = !unseen;
   document.getElementById("n-unseen").textContent = unseen;
@@ -305,7 +311,7 @@ function draw() {
   // Modes with no countdown and no flash (Relay, Chain, Wiretap) still have something to say in
   // the middle of the table. Without this the room screen went blank for four of seven games.
   // The ring draws its own middle, so it is excluded.
-  if (S?.phase === "live" && !v.countdownTo && !v.flashAt && v.kind !== "ring") {
+  if (S?.phase === "live" && !v.countdownTo && !v.flashAt && v.kind !== "ring" && v.kind !== "sight") {
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     if (v.big != null) {
@@ -336,6 +342,113 @@ function draw() {
     ctx.font = "800 28px ui-sans-serif, system-ui";
     ctx.textAlign = "center";
     ctx.fillText(S.notice || "next round", cx, cy);
+  }
+
+  // ---- lines of sight -----------------------------------------------------------
+  // Every phone in the room knows the name of the person it is pointing at, and no phone is told
+  // who is pointing back. This screen is the only place the whole graph exists at once — so it
+  // draws it: a needle from every player toward whoever they have in their sights, the holder's
+  // one in red, and the throw arcing across the table while its target is still trying to work
+  // out who to face.
+  if (v.kind === "sight" && S?.phase === "live") {
+    const seats = (v.map?.players) || [];
+    const spot = new Map(seats.map((q) => [q.id, pos(q.angle, cx, cy, r)]));
+    const nameOf = new Map(seats.map((q) => [q.id, q.name]));
+    const holder = v.map?.holder;
+    const flight = v.map?.flight;
+
+    // The fuse ring and its number are already drawn above, off the same deadline.
+
+    // Who is marked right now, so the audience can watch a person not know it.
+    const markedBy = new Map();
+    for (const a of v.aims || []) if (a.holder) markedBy.set(a.to, a.from);
+
+    for (const a of v.aims || []) {
+      const from = spot.get(a.from), to = spot.get(a.to);
+      if (!from || !to) continue;
+      const dx = to.x - from.x, dy = to.y - from.y;
+      const len = Math.hypot(dx, dy) || 1;
+      // Stop short of the target so the needle points AT a person rather than through them.
+      const tipX = from.x + (dx / len) * (len - 26), tipY = from.y + (dy / len) * (len - 26);
+      ctx.beginPath();
+      ctx.moveTo(from.x, from.y);
+      ctx.lineTo(tipX, tipY);
+      ctx.strokeStyle = a.holder ? "rgba(255,90,78,.92)" : "rgba(140,160,200,.30)";
+      ctx.lineWidth = a.holder ? 3 : 1.5;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(tipX, tipY, a.holder ? 5 : 3, 0, Math.PI * 2);
+      ctx.fillStyle = a.holder ? "#ff5a4e" : "rgba(140,160,200,.45)";
+      ctx.fill();
+    }
+
+    // the throw, arcing, with the same measured span the rest of this screen uses
+    let inAir = null;
+    if (flight) {
+      const a = spot.get(flight.from), z = spot.get(flight.to);
+      if (a && z) {
+        const span = Math.max(120, v.flightMs || 900);
+        const t = Math.max(0, Math.min(1, 1 - (flight.arriveAt - serverNow()) / span));
+        const mx = (a.x + z.x) / 2, my = (a.y + z.y) / 2;
+        const qx = mx + (cx - mx) * -0.18, qy = my - r * 0.24;
+        inAir = {
+          x: (1 - t) * (1 - t) * a.x + 2 * (1 - t) * t * qx + t * t * z.x,
+          y: (1 - t) * (1 - t) * a.y + 2 * (1 - t) * t * qy + t * t * z.y,
+        };
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.quadraticCurveTo(qx, qy, z.x, z.y);
+        ctx.strokeStyle = "rgba(255,200,87,.45)";
+        ctx.lineWidth = 3;
+        ctx.setLineDash([6, 8]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+
+    for (const q of seats) {
+      const pt = spot.get(q.id);
+      const isHolder = q.id === holder;
+      const isMarked = markedBy.get(q.id) != null;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 16, 0, Math.PI * 2);
+      ctx.fillStyle = isHolder ? "#ff5a4e" : isMarked ? "#ffc857" : "#dce3f0";
+      ctx.fill();
+      if (isMarked && !isHolder) {
+        ctx.strokeStyle = "rgba(255,200,87,.5)";
+        ctx.lineWidth = 9;
+        ctx.stroke();
+      }
+      const label = pos(q.angle, cx, cy, r + 56);
+      const nm = (q.name || "?").toUpperCase();
+      ctx.fillStyle = "#f2f5fa";
+      ctx.font = "800 13px ui-sans-serif, system-ui";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const halfText = ctx.measureText(nm).width / 2 + 4;
+      ctx.fillText(nm, Math.min(w - halfText, Math.max(halfText, label.x)),
+                   Math.min(h - 18, Math.max(12, label.y)));
+      // The audience is told what the player is not.
+      if (isMarked && !isHolder) {
+        ctx.fillStyle = "#ffc857";
+        ctx.font = "800 10px ui-sans-serif, system-ui";
+        ctx.fillText("DOESN'T KNOW", Math.min(w - 46, Math.max(46, label.x)),
+                     Math.min(h - 5, Math.max(24, label.y + 14)));
+      }
+    }
+
+    if (inAir) {
+      ctx.beginPath();
+      ctx.arc(inAir.x, inAir.y, 13, 0, Math.PI * 2);
+      ctx.fillStyle = "#ffc857";
+      ctx.shadowColor = "#ffc857";
+      ctx.shadowBlur = 20;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+
+    requestAnimationFrame(draw);
+    return;
   }
 
   // ---- the table, as phones ----------------------------------------------------
