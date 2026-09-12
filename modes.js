@@ -39,6 +39,10 @@ export const TUNING = {
 // If the first playtest finds every aim landing on the person opposite, set this to 180 and the
 // room is playable in ten seconds instead of waiting on a redeploy.
 const AIM_OFFSET = (Number(process.env.HUDDLE_AIM_OFFSET_DEG) || 0) * Math.PI / 180;
+// The handedness hatch. It cannot live on the server the way the offset does: by the time an aim
+// arrives here it is already world-referenced, and the turn it was built from is gone — so the
+// server can shift an angle but it can no longer mirror one. The phone has to be told.
+export const AIM_INVERT = process.env.HUDDLE_AIM_INVERT === "1";
 
 const { FLIGHT, LOCK, BRACE, FUSE_MIN, FUSE_MAX, GAP, RELAY_PENALTY, CHAIN_EXTEND, TILT_SPEED,
         AIM_STALE, SO_FLIGHT, SO_LOCK, SO_FUSE_MIN, SO_FUSE_MAX } = TUNING;

@@ -177,8 +177,23 @@ export const viewportYaw = (alpha, screenAngle = 0) => wrapDeg((alpha || 0) + (s
  * their seat. `yawNow`/`yawRef` are viewportYaw values in degrees. Returns radians, wrapped, so
  * it drops straight into ctx.towards().
  */
-export function aimAngle(screenAngle, yawNow, yawRef) {
-  const turned = wrapDeg(yawNow - yawRef) * Math.PI / 180;
+export function aimAngle(screenAngle, yawNow, yawRef, invert = false) {
+  // `invert` exists because there are TWO ways this can be wrong at a table and they need two
+  // different fixes.
+  //
+  // A PHASE error — every aim lands on the person opposite the one you are pointing at — is a
+  // constant, and HUDDLE_AIM_OFFSET_DEG=180 cures it.
+  //
+  // A HANDEDNESS error is not. If the sense of the turn is backwards, pointing left hits the
+  // person on your right, and the error is 2*theta from centre rather than constant — no single
+  // offset can correct it, and at the table it reads as "the offset is slightly off", so you can
+  // burn twenty minutes turning a dial that was never going to converge. This flips the sense.
+  //
+  // The sign of the alpha term is solid: the DeviceOrientation frame is right-handed with +z out
+  // of the screen, so alpha increases anticlockwise seen from above, which is what the derivation
+  // above assumes. The uncertain one is screen.orientation.angle's sign RELATIVE to alpha, and
+  // the two only disagree when somebody plays in landscape.
+  const turned = wrapDeg(yawNow - yawRef) * Math.PI / 180 * (invert ? -1 : 1);
   const a = screenAngle - turned;
   return Math.atan2(Math.sin(a), Math.cos(a));
 }

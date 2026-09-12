@@ -90,7 +90,21 @@ between playtests without a redeploy.
 | `HUDDLE_SO_LOCK_MS` | `700` | How long after catching before you can throw it on |
 | `HUDDLE_SO_FUSE_MIN_MS` | `14000` | Shortest Standoff fuse |
 | `HUDDLE_SO_FUSE_MAX_MS` | `22000` | Longest Standoff fuse |
-| `HUDDLE_AIM_OFFSET_DEG` | `0` | Room-wide aim offset. If the first playtest finds every aim landing on the wrong person, set this (try 180) instead of redeploying |
+| `HUDDLE_AIM_OFFSET_DEG` | `0` | Room-wide aim PHASE fix. Every aim landing on the person opposite the one you point at is a constant error — set 180 |
+| `HUDDLE_AIM_INVERT` | off | Set to `1` for a HANDEDNESS error: point left and you hit right. The error is 2×angle from centre, so the offset above can never fix it |
+
+### Telling those two apart, in ten seconds, at the table
+
+Two phones, sitting clearly apart. A places a seat, then physically turns to face B.
+
+- **A's screen names B** — correct. Ship it.
+- **A's screen names the person opposite B** — phase error. `HUDDLE_AIM_OFFSET_DEG=180`, restart.
+- **A turns toward B and the name moves AWAY from B**, or left and right are swapped — handedness.
+  The offset will not fix this and trying to dial it in will waste the playtest. `HUDDLE_AIM_INVERT=1`, restart.
+
+Nothing in the aim chain has ever run on a real phone. The derivation and the wrap are unit-tested;
+the sign has never been felt by a hand. These two knobs exist so that a wrong sign costs a restart
+rather than the demo.
 
 ```bash
 HUDDLE_FUSE_MAX_MS=14000 HUDDLE_GAP_MS=180 npm start

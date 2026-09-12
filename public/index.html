@@ -548,7 +548,7 @@ function whoIsAt(angle) {
 function aimFor(screenAngle) {
   const yaw = tilt?.yaw();
   if (yaw == null || seatYaw == null) return screenAngle;
-  return aimAngle(screenAngle, yaw, seatYaw);
+  return aimAngle(screenAngle, yaw, seatYaw, !!S?.aimInvert);
 }
 
 function tiltPipe(x, y) {
@@ -577,7 +577,7 @@ function aimPipe() {
   if (!S || S.phase !== "live" || !S.you?.alive || !S.view?.wantsAim) return;
   const yaw = tilt?.yaw();
   if (yaw == null || seatYaw == null) return;         // no sensor: the swipe carries the aim instead
-  const angle = aimAngle(POINTING, yaw, seatYaw);
+  const angle = aimAngle(POINTING, yaw, seatYaw, !!S?.aimInvert);
   const t = Date.now();
   if (!aimDue(aimLast, angle, t - aimSent, { beat: AIM_BEAT })) return;
   aimSent = t;

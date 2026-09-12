@@ -9,7 +9,7 @@ import { readFile } from "node:fs/promises";
 import { extname, join, normalize, sep } from "node:path";
 import { WebSocketServer } from "ws";
 
-import { MODES, nearest, seatBlocker, seatWaiting } from "./modes.js";
+import { AIM_INVERT, MODES, nearest, seatBlocker, seatWaiting } from "./modes.js";
 import * as stats from "./deploy/stats.js";
 import * as say from "./deploy/say.js";
 import * as announcer from "./deploy/announcer.js";
@@ -231,6 +231,7 @@ function push() {
     t: "view", now: now(), phase: room.phase, mode: room.modeKey, modeName: m.name,
     notice: room.notice, winner: room.winner, records: publicRecords(),
     modes: Object.entries(MODES).map(([k, v]) => ({ key: k, name: v.name, min: v.min, blurb: v.blurb })),
+    aimInvert: AIM_INVERT,     // set HUDDLE_AIM_INVERT=1 and restart if aiming sweeps the wrong way
     players: players().map((p) => ({ id: p.id, name: p.name, alive: p.alive, score: p.score, seat: p.seat, placed: !!p.placed })),
   };
   // Everything that reached ANY phone this broadcast. Collected from the views we actually

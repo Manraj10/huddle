@@ -175,3 +175,31 @@ test("aim due-ness wraps at the top of the circle", () => {
   assert.equal(aimDue(near, -near, 60), false, "0.01 radians across the wrap is not a turn");
   assert.equal(aimDue(near, -near, 300), true, "but the heartbeat still fires");
 });
+
+test("the invert hatch fixes the bug the offset cannot", () => {
+  // Two different failures look similar at a table and only one has a cure in the offset.
+  //
+  // PHASE: every aim lands on the person OPPOSITE the one you are pointing at. Constant error,
+  // HUDDLE_AIM_OFFSET_DEG=180 fixes it.
+  //
+  // HANDEDNESS: the aim sweeps the wrong way round the ring — point left, hit right. The error is
+  // 2*theta from centre, so no single offset converges on it. That is what this flips.
+  const ref = viewportYaw(0, 0);
+  const turn = (deg) => viewportYaw(deg, 0);
+
+  // Turning 30 degrees one way should move the aim one way; inverted, the other.
+  const normal = aimAngle(0, turn(30), ref);
+  const flipped = aimAngle(0, turn(30), ref, true);
+  near(flipped, -normal, 1e-9);
+  assert.notEqual(Math.sign(normal), Math.sign(flipped), "the sweep reverses");
+
+  // The error a handedness bug produces really is 2*theta, which is why a constant cannot fix it.
+  for (const deg of [10, 30, 75, 140]) {
+    const gap = Math.abs(aimAngle(0, turn(deg), ref) - aimAngle(0, turn(deg), ref, true));
+    near(gap, Math.abs(2 * deg * Math.PI / 180), 1e-9);
+  }
+
+  // Not turning at all is identical either way — a handedness bug is invisible until you move,
+  // which is exactly why it gets misread as "the offset is a bit off".
+  near(aimAngle(0.4, ref, ref, true), aimAngle(0.4, ref, ref), 1e-12);
+});
