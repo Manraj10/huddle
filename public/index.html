@@ -39,6 +39,16 @@
   --win-ink: #131a02;
   --you: #ff7a3c;               /* only ever means "this is you" */
 
+  /* Standoff's two states that are not "holding it". They must be distinguishable from the
+     holder's hot AND from each other at a glance, so they are a cold alarm and a white-hot
+     arrival rather than two shades of the same red. */
+  --marked: #241206;            /* someone has you in their sights and you do not know who */
+  --marked-ink: #ffb95c;
+  --inbound: #ffe8d6;           /* it is in the air, at you, right now */
+  --inbound-ink: #2a0d00;
+
+  --edge: 0;                    /* vignette strength, written from fuse urgency */
+
   --gutter: 0px;                /* side space the hero gives up to the ring names */
   --pulse: 720ms;               /* rewritten from fuse urgency: 720ms -> 180ms */
   --tense: 0px;                 /* same urgency as weight, for reduced motion and for silence */
@@ -94,15 +104,24 @@ body {
 /* No aim yet — pointing into the gap between two people. A dash reads as a broken screen, so it
    becomes a reticle that is obviously waiting for something rather than reporting nothing. */
 .big.noaim { font-size: clamp(54px, 19vw, 132px); opacity: .30; letter-spacing: .12em; }
+/* You just caught it and cannot throw it on yet. Without this the player taps, nothing happens,
+   and the game reads as broken rather than as locked. */
+#play.locked .hero { opacity: .55; }
+#play.locked .hero::after {
+  content: ""; display: block; height: 3px; width: 46%; margin: 14px auto 0; border-radius: 3px;
+  background: currentColor; opacity: .5;
+}
 .on-light .sub { color: #4a4f63; }
 
 /* -------------------------------------------------------------------- chrome */
 .scores {
   position: fixed; top: 0; left: 0; right: 0; z-index: 3;
-  padding: 9px 60px 9px 14px; display: flex; gap: 11px; justify-content: center; flex-wrap: wrap;
+  padding: 9px 62px 9px 14px; display: flex; gap: 11px; justify-content: center;
+  flex-wrap: nowrap; overflow: hidden;      /* never a second line: it lands on the ring names */
   font: 600 11px/1 var(--text); letter-spacing: .12em; text-transform: uppercase; color: #7b7f94;
   pointer-events: none;
 }
+.scores span { white-space: nowrap; }
 .scores i { font-style: normal; opacity: .5; }
 /* In the lobby the seat ring IS the roster — every player is already on it, at their real angle,
    with their name. A second list of the same names across the top of the heading is noise that
@@ -141,15 +160,32 @@ body[data-screen="join"] .reset { display: none; }
 /* Every phone gets this, holder or not, because the rising tone is already shared — only WHO
    holds it is secret. It is how a deaf player reads the tension and how anyone reads it from
    across a table, so it is a band and not a hairline. */
+/* The room's tension, drawn on the walls. Every phone gets it whether or not it is holding
+   anything, because the fuse tone is already shared — only WHO holds it is secret. It closes in
+   as the fuse burns, so a player who is looking at other people still feels the clock in their
+   peripheral vision. */
+#app::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 1;
+  box-shadow: inset 0 0 calc(var(--edge) * 90px) calc(var(--edge) * 26px) currentColor;
+  opacity: .55; transition: box-shadow 140ms linear;
+}
+
+
+/* It is in the air AT YOU. A band at the top, closing over the flight — the top, so it can never
+   be confused with the fuse along the bottom. Driven from the arrival DEADLINE against the synced
+   clock, never from a number the server rendered. */
+.inbound { position: fixed; left: 0; right: 0; top: 0; height: 10px; z-index: 5; background: #00000030; }
+.inbound[hidden] { display: none; }
+.inbound i { display: block; height: 100%; width: 100%; background: var(--inbound-ink); transform-origin: right center; }
+
 .fuse { position: fixed; left: 0; right: 0; bottom: 0; height: 14px; z-index: 4; background: #ffffff10; }
 .fuse[hidden] { display: none; }
 .fuse i { display: block; height: 100%; width: 100%; background: var(--ink); transform-origin: left center; }
 
 /* -------------------------------------------------------------- state chip (shape, not colour) */
 .chip {
-  position: absolute; top: 40px; left: 50%; transform: translateX(-50%);
-  display: flex; align-items: center; gap: 9px;
-  font: 600 11px/1 var(--text); letter-spacing: .16em; text-transform: uppercase; opacity: .62;
+  display: inline-flex; align-items: center; gap: 10px;
+  font: 700 11px/1 var(--text); letter-spacing: .16em; text-transform: uppercase; opacity: .7;
 }
 .chip[hidden] { display: none; }
 .shape { width: 13px; height: 13px; border: 2px solid currentColor; }
@@ -167,7 +203,9 @@ body[data-screen="join"] .reset { display: none; }
   justify-items: center; align-items: center;
   text-align: center; padding: 0 var(--gutter);
 }
-#play .chip { grid-row: 1; position: static; transform: none; margin-top: 52px; }
+/* The chip lives inside the hero now, directly above the state word, so the shape and the word
+   are one object rather than two things shouting from opposite ends of the screen. */
+#play .chip { margin: 0 auto 14px; }
 #play .hero { grid-row: 2; max-width: 100%; align-self: center; }
 #play #arena { grid-row: 1 / -1; }
 #play.arena-on .hero, #play.arena-on .chip { display: none; }
@@ -397,8 +435,8 @@ button:disabled { opacity: .38; }
   </section>
 
   <section class="screen" id="play" hidden>
-    <div class="chip" id="chip"><span class="shape circle" id="shape"></span><span id="chipText"></span></div>
     <div class="hero" id="hero">
+      <div class="chip" id="chip"><span class="shape circle" id="shape"></span><span id="chipText"></span></div>
       <div class="big" id="big"></div>
       <div class="clock" id="clock" hidden></div>
       <div class="title" id="title"></div>
@@ -411,6 +449,7 @@ button:disabled { opacity: .38; }
 <div class="ring" id="ring"></div>
 <div class="scores" id="scores"></div>
 <div class="notice" id="notice" role="status" aria-live="polite"></div>
+<div class="inbound" id="inbound" hidden aria-hidden="true"><i id="inboundFill"></i></div>
 <div class="fuse" id="fuse" hidden aria-hidden="true"><i id="fuseFill"></i></div>
 
 <script type="module">
@@ -793,7 +832,7 @@ function drawRing(list) {
     const t = Math.min(hw / Math.max(1e-6, Math.abs(co)), hh / Math.max(1e-6, Math.abs(si)));
     const w = b.offsetWidth / 2 + 8, h = b.offsetHeight / 2 + 4;
     b.style.left = `${Math.min(W - w, Math.max(w, cx + co * t))}px`;
-    b.style.top = `${Math.min(H - h - 34, Math.max(h + 40, cy + si * t))}px`;
+    b.style.top = `${Math.min(H - h - 40, Math.max(h + 52, cy + si * t))}px`;
   }
 }
 
@@ -879,10 +918,22 @@ function fitBig() {
     bigEl.style.fontSize = `${Math.max(24, base * (box / w))}px`;
   }
 }
-function chip(shape, label) {
+function chip(shape, label, title) {
+  // The shape always shows while there is a state to show — it is what a colourblind player reads
+  // instead of the colour. The WORD only shows when it says something the title does not, because
+  // the same sentence twice on one screen is one more thing competing for a one-second glance.
+  const same = label && title && label.toUpperCase() === String(title).toUpperCase();
   chipEl.hidden = !label;
   shapeEl.className = `shape ${shape}`;
-  text(chipText, label || "");
+  text(chipText, same ? "" : (label || ""));
+}
+
+// How long this throw is in the air, learned from the first frame we see it rather than hardcoded
+// against a server constant that is meant to be retuned between playtests.
+let inboundAt = 0, inboundMs = 900;
+function inboundSpan(at) {
+  if (at !== inboundAt) { inboundAt = at; inboundMs = Math.max(200, at - serverNow()); }
+  return inboundMs;
 }
 
 function paint() {
@@ -938,6 +989,17 @@ function paint() {
     shape = "diamond"; label = "you have it"; pulsing = true;
   }
   if (v.braced) { bg = "var(--brace)"; ink = "var(--brace-ink)"; shape = "triangle"; label = "braced"; }
+  // Someone has you in their sights and your phone will not say who. This is the whole game, and
+  // until now it differed from "nothing is happening" only by a line of small text.
+  if (v.marked && !v.hot) {
+    bg = "var(--marked)"; ink = "var(--marked-ink)";
+    shape = "triangle"; label = "in the crosshairs"; pulsing = true;
+  }
+  // It is in the air, at you, and you have the length of the flight to face whoever threw it.
+  if (v.incomingAt) {
+    bg = "var(--inbound)"; ink = "var(--inbound-ink)";
+    shape = "diamond"; label = "incoming"; pulsing = true; light = true;
+  }
   if (v.flashAt) {
     const lit = serverNow() >= v.flashAt;
     big = lit ? v.litBig : v.waitBig;
@@ -990,7 +1052,7 @@ function paint() {
   app.style.setProperty("--pulse", `${Math.round(720 - urgency * 540)}ms`);
   app.style.setProperty("--tense", `${(1 + urgency * 6).toFixed(1)}px`);
 
-  chip(shape, label);
+  chip(shape, label, title);
   // An em dash is what the server sends when your aim resolves to nobody — you are pointing into
   // the gap between two people. Rendered literally it is a white bar in the middle of a black
   // screen, which reads as a crash. It becomes a reticle that is visibly waiting.
@@ -1015,6 +1077,22 @@ function paint() {
   fuseEl.hidden = !(v.tone && S.phase === "live");
   if (!fuseEl.hidden) fuseFill.style.transform = `scaleX(${1 - urgency})`;
   tone(v.tone ? Math.max(0.05, urgency) : 0);
+
+  // The walls close in with the fuse. Colour alone never carries a state here, so this rides on
+  // top of a shape and a word rather than replacing them.
+  app.style.setProperty("--edge", (v.tone && S.phase === "live" ? urgency * urgency : 0).toFixed(3));
+
+  // The flight, computed from its deadline against our own synced clock. The server sends when it
+  // lands, never how long is left.
+  const inbound = v.incomingAt && S.phase === "live";
+  $("inbound").hidden = !inbound;
+  if (inbound) {
+    const left = clamp01((v.incomingAt - serverNow()) / Math.max(1, inboundSpan(v.incomingAt)));
+    $("inboundFill").style.transform = `scaleX(${left})`;
+  }
+
+  // Holding it but still locked out of throwing it on.
+  play.classList.toggle("locked", !!v.hot && v.throwable === false);
 }
 // Scheduling lives OUTSIDE paint, so a frame that never fires cannot queue another one.
 function frame() { paint(); requestAnimationFrame(frame); }
