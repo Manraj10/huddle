@@ -43,7 +43,7 @@ const http = createServer(async (req, res) => {
 const room = {
   players: new Map(),        // id -> {id, name, ws, alive, score, seat, placed}
   phase: "lobby",            // lobby | live | gap | over
-  modeKey: "blindside",
+  modeKey: "standoff",       // what a stranger who walks up and scans the QR gets handed
   data: {},                  // whatever the current mode needs
   winner: null,
   headline: null,            // a mode's own last word, for co-op rounds nobody "wins"

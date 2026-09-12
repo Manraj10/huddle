@@ -91,109 +91,6 @@ function takeAim(ctx, d, p, angle) {
 }
 
 export const MODES = {
-  // ------------------------------------------------------------------ hidden state
-  blindside: {
-    name: "Blindside", min: 2,
-    blurb: "Only the holder sees the fuse. Swipe it at someone before it burns down.",
-    start(ctx) {
-      const d = ctx.data;
-      d.holder = pick(ctx.alive()).id;
-      d.fuseAt = ctx.now() + rand(FUSE_MIN, FUSE_MAX);
-      d.startedAt = ctx.now();
-      d.lockUntil = ctx.now() + LOCK;
-      d.flight = null;
-      d.braced = {};
-    },
-    act(ctx, p, msg) {
-      const d = ctx.data;
-      if (msg.a === "tap") {
-        // Non-holders get one decision per round so the "?" screen is a choice, not a wait.
-        if (d.holder === p.id || d.braced[p.id]) return false;
-        d.braced[p.id] = ctx.now() + BRACE;
-        return true;
-      }
-      if (msg.a !== "swipe" || d.holder !== p.id || d.flight || ctx.now() < d.lockUntil) return false;
-      const target = ctx.towards(p, msg.angle);
-      if (!target) return false;
-      d.flight = { to: target.id, arriveAt: ctx.now() + FLIGHT };
-      d.holder = null;
-      return true;
-    },
-    tick(ctx, now) {
-      const d = ctx.data;
-      let changed = false;
-      // A phone that dropped must not take the round down with it.
-      if (d.holder != null && !ctx.alive().some((p) => p.id === d.holder)) {
-        const next = pick(ctx.alive());
-        d.holder = next ? next.id : null;
-        d.lockUntil = now + LOCK;
-        changed = true;
-      }
-      if (d.flight && !ctx.alive().some((p) => p.id === d.flight.to)) {
-        const next = pick(ctx.alive());
-        if (next) { d.flight = null; d.holder = next.id; d.lockUntil = now + LOCK; changed = true; }
-      }
-      if (d.flight && now >= d.flight.arriveAt) {
-        const target = ctx.players().find((p) => p.id === d.flight.to && p.alive);
-        d.holder = (target || pick(ctx.alive()) || {}).id ?? null;
-        d.flight = null; d.lockUntil = now + LOCK; changed = true;
-      }
-      if (now >= d.fuseAt) {
-        const id = d.holder ?? d.flight?.to;
-        const loser = ctx.players().find((p) => p.id === id);
-        // A brace is a real save, spent the moment it works: you bet on when the fuse ends, and
-        // winning that bet throws the bomb back into the room on a short fuse instead of ending
-        // the round. Bracing used to only change your background colour, which is not a decision.
-        if (loser && d.braced[loser.id] > now) {
-          delete d.braced[loser.id];
-          const next = pick(ctx.alive().filter((p) => p.id !== loser.id)) || loser;
-          d.holder = next.id;
-          d.flight = null;
-          d.lockUntil = now + LOCK;
-          d.startedAt = now;
-          d.fuseAt = now + rand(6000, 10000);
-          ctx.notice(`${loser.name} braced and took the blast — it is loose again, on a short fuse`);
-          return true;
-        }
-        d.holder = null; d.flight = null; d.fuseAt = Infinity;
-        ctx.eliminate(loser, loser ? `${loser.name} was holding it` : "nobody was holding it");
-        return true;
-      }
-      return changed;
-    },
-    view(ctx, p) {
-      const d = ctx.data;
-      if (!p.alive) return { kind: "text", title: "OUT", sub: `${ctx.alive().length} still in`, tone: 0 };
-      // The tone plays on EVERY phone at the same pitch off the shared clock. If only the holder's
-      // phone made noise, the whole room could hear who had it and the secret would be worthless.
-      const shared = { tone: 1, toneFrom: d.startedAt, toneTo: d.fuseAt };
-      if (d.holder === p.id) {
-        return {
-          ...shared, kind: "text", countdownTo: d.fuseAt, title: "YOU HAVE IT", sub: "swipe toward someone",
-          hot: true, pulse: true, ring: ringOf(ctx, p),
-        };
-      }
-      const bracedUntil = d.braced[p.id];
-      return {
-        ...shared, kind: "text", big: "?", dim: true,
-        title: d.flight ? "in the air" : "someone has it",
-        sub: bracedUntil ? "braced — it will cost you the bomb, not the round" : "tap to brace",
-        braced: bracedUntil > ctx.now(),
-      };
-    },
-    spectate(ctx) {
-      const d = ctx.data;
-      const holder = ctx.players().find((q) => q.id === d.holder);
-      return {
-        kind: "text", countdownTo: d.fuseAt,
-        title: d.flight ? "IN THE AIR" : (holder?.name || "—"),
-        sub: "you can see it. they cannot.",
-        map: { holder: d.holder, flight: d.flight, players: ctx.alive().map((q) => ({ id: q.id, name: q.name, angle: q.seat })) },
-      };
-    },
-  },
-
-
   // ------------------------------------------------- the one that needs the room to be a room
   // Everyone is aiming, all the time, and every aim resolves through the seat angles the players
   // declared themselves — so your phone can tell you the NAME of the person you are pointing at.
@@ -352,6 +249,109 @@ export const MODES = {
       };
     },
   },
+  // ------------------------------------------------------------------ hidden state
+  blindside: {
+    name: "Blindside", min: 2,
+    blurb: "Only the holder sees the fuse. Swipe it at someone before it burns down.",
+    start(ctx) {
+      const d = ctx.data;
+      d.holder = pick(ctx.alive()).id;
+      d.fuseAt = ctx.now() + rand(FUSE_MIN, FUSE_MAX);
+      d.startedAt = ctx.now();
+      d.lockUntil = ctx.now() + LOCK;
+      d.flight = null;
+      d.braced = {};
+    },
+    act(ctx, p, msg) {
+      const d = ctx.data;
+      if (msg.a === "tap") {
+        // Non-holders get one decision per round so the "?" screen is a choice, not a wait.
+        if (d.holder === p.id || d.braced[p.id]) return false;
+        d.braced[p.id] = ctx.now() + BRACE;
+        return true;
+      }
+      if (msg.a !== "swipe" || d.holder !== p.id || d.flight || ctx.now() < d.lockUntil) return false;
+      const target = ctx.towards(p, msg.angle);
+      if (!target) return false;
+      d.flight = { to: target.id, arriveAt: ctx.now() + FLIGHT };
+      d.holder = null;
+      return true;
+    },
+    tick(ctx, now) {
+      const d = ctx.data;
+      let changed = false;
+      // A phone that dropped must not take the round down with it.
+      if (d.holder != null && !ctx.alive().some((p) => p.id === d.holder)) {
+        const next = pick(ctx.alive());
+        d.holder = next ? next.id : null;
+        d.lockUntil = now + LOCK;
+        changed = true;
+      }
+      if (d.flight && !ctx.alive().some((p) => p.id === d.flight.to)) {
+        const next = pick(ctx.alive());
+        if (next) { d.flight = null; d.holder = next.id; d.lockUntil = now + LOCK; changed = true; }
+      }
+      if (d.flight && now >= d.flight.arriveAt) {
+        const target = ctx.players().find((p) => p.id === d.flight.to && p.alive);
+        d.holder = (target || pick(ctx.alive()) || {}).id ?? null;
+        d.flight = null; d.lockUntil = now + LOCK; changed = true;
+      }
+      if (now >= d.fuseAt) {
+        const id = d.holder ?? d.flight?.to;
+        const loser = ctx.players().find((p) => p.id === id);
+        // A brace is a real save, spent the moment it works: you bet on when the fuse ends, and
+        // winning that bet throws the bomb back into the room on a short fuse instead of ending
+        // the round. Bracing used to only change your background colour, which is not a decision.
+        if (loser && d.braced[loser.id] > now) {
+          delete d.braced[loser.id];
+          const next = pick(ctx.alive().filter((p) => p.id !== loser.id)) || loser;
+          d.holder = next.id;
+          d.flight = null;
+          d.lockUntil = now + LOCK;
+          d.startedAt = now;
+          d.fuseAt = now + rand(6000, 10000);
+          ctx.notice(`${loser.name} braced and took the blast — it is loose again, on a short fuse`);
+          return true;
+        }
+        d.holder = null; d.flight = null; d.fuseAt = Infinity;
+        ctx.eliminate(loser, loser ? `${loser.name} was holding it` : "nobody was holding it");
+        return true;
+      }
+      return changed;
+    },
+    view(ctx, p) {
+      const d = ctx.data;
+      if (!p.alive) return { kind: "text", title: "OUT", sub: `${ctx.alive().length} still in`, tone: 0 };
+      // The tone plays on EVERY phone at the same pitch off the shared clock. If only the holder's
+      // phone made noise, the whole room could hear who had it and the secret would be worthless.
+      const shared = { tone: 1, toneFrom: d.startedAt, toneTo: d.fuseAt };
+      if (d.holder === p.id) {
+        return {
+          ...shared, kind: "text", countdownTo: d.fuseAt, title: "YOU HAVE IT", sub: "swipe toward someone",
+          hot: true, pulse: true, ring: ringOf(ctx, p),
+        };
+      }
+      const bracedUntil = d.braced[p.id];
+      return {
+        ...shared, kind: "text", big: "?", dim: true,
+        title: d.flight ? "in the air" : "someone has it",
+        sub: bracedUntil ? "braced — it will cost you the bomb, not the round" : "tap to brace",
+        braced: bracedUntil > ctx.now(),
+      };
+    },
+    spectate(ctx) {
+      const d = ctx.data;
+      const holder = ctx.players().find((q) => q.id === d.holder);
+      return {
+        kind: "text", countdownTo: d.fuseAt,
+        title: d.flight ? "IN THE AIR" : (holder?.name || "—"),
+        sub: "you can see it. they cannot.",
+        map: { holder: d.holder, flight: d.flight, players: ctx.alive().map((q) => ({ id: q.id, name: q.name, angle: q.seat })) },
+      };
+    },
+  },
+
+
   // ------------------------------------------- synchronised state (the clock sync, made visible)
   flash: {
     name: "Flash", min: 2,
