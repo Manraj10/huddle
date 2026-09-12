@@ -15,7 +15,10 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 const child = spawn("node", ["server.js"], {
   cwd: ROOT,
-  env: { ...process.env, PORT: String(PORT), HUDDLE_ROOM_KEY: KEY },
+  env: {
+    ...process.env, PORT: String(PORT), HUDDLE_ROOM_KEY: KEY,
+    HUDDLE_FUSE_MIN_MS: "700", HUDDLE_FUSE_MAX_MS: "900",   // a round has to end inside a test
+  },
   stdio: ["ignore", "pipe", "pipe"],
 });
 let boot = "";
@@ -106,6 +109,59 @@ try {
   phones[3].seat(ANGLES[3]);
   await sleep(150);
   is(notice(phones[0]) == null, "with everyone placed the notice clears", JSON.stringify(notice(phones[0])));
+
+  console.log("a phone that never sat down is not a person in the room");
+  {
+    // Default seat is 0 — a real angle, with nobody sitting at it. If an unplaced phone counts as
+    // alive it becomes a legal target there, so a throw aimed at empty air lands on someone who
+    // never chose that place. That is this project's one claim, broken by a default value.
+    const ghost = await new Phone("NOSEAT").open();
+    ghost.join();
+    await sleep(250);
+    const roster = phones[0].latest?.players || [];
+    is(roster.some((p) => p.name === "NOSEAT"), "they are in the room and visible", JSON.stringify(roster.map((p) => p.name)));
+    const waiting = phones[0].latest?.view?.seatNotice || "";
+    is(/NOSEAT/.test(waiting), "and the room is told they have not sat down", JSON.stringify(waiting));
+
+    // Whoever the engine picks to hold the bomb, it must not be the phone with no seat. The
+    // spectator has to be listening BEFORE the round starts — fuses are short in this harness and
+    // the round can be over before a late sample lands.
+    const spec2 = new WebSocket(`ws://127.0.0.1:${PORT}/?spectate=${KEY}`);
+    await new Promise((res) => { spec2.on("open", res); });
+    let ring = null;
+    spec2.on("message", (b) => {
+      const m = JSON.parse(b);
+      if (m.t === "view" && m.phase === "live" && m.view?.map?.players?.length) {
+        ring = ring || m.view.map.players.map((q) => q.name);
+      }
+    });
+    phones[0].send({ t: "start", mode: "blindside" });
+    for (let i = 0; i < 60 && !ring; i++) await sleep(25);
+    is(!!ring, "the round runs", "never saw a live spectator frame");
+    is(ring && !ring.includes("NOSEAT"),
+      "and they are not a legal target while it does", JSON.stringify(ring));
+    spec2.close();
+    ghost.die();
+    phones[0].send({ t: "reset" });
+    await sleep(250);
+    for (let i = 0; i < 4; i++) phones[i].seat(ANGLES[i]);
+    await sleep(200);
+  }
+
+  console.log("a won round does not park the table forever");
+  {
+    // Two phones, one wins, and nothing in the engine used to leave the "over" phase except a
+    // human tapping RESET — which strangers who arrived thirty seconds ago do not know to do.
+    phones[0].send({ t: "start", mode: "blindside" });
+    const over = await until(phones[0], (m) => m.phase === "over", "someone wins", 25000);
+    is(!!over, "a blindside cascade reaches a winner", phones[0].latest?.phase);
+    const back = await until(phones[0], (m) => m.phase === "lobby", "the table reopens", 14000);
+    is(!!back, "and the room returns to the lobby on its own rather than parking on the winner",
+      "still on the winner screen — the next group finds a dead table");
+    await sleep(150);
+    for (let i = 0; i < 4; i++) phones[i].seat(ANGLES[i]);
+    await sleep(200);
+  }
 
   console.log("nobody shares a name");
   // The mechanic is "aim at a person" and the phone previews that person by name, so two players

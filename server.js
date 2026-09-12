@@ -52,6 +52,11 @@ const room = {
 };
 let nextId = 1;
 let gapTimer = null;
+let overTimer = null;
+// Nothing in this file ever left the "over" phase except someone tapping RESET. At a table where
+// the players are strangers who arrived thirty seconds ago, nobody knows to — so the room parks
+// on a winner screen and the next group finds a dead table.
+const AUTO_LOBBY = process.env.HUDDLE_AUTO_LOBBY !== "0";
 let lastChange = Date.now();
 const spectators = new Set();
 
@@ -60,10 +65,21 @@ const mode = () => MODES[room.modeKey];
 const players = () => [...room.players.values()];
 // A phone whose socket is gone cannot hold a bomb or be thrown to, even during the rejoin
 // grace window. Without this the round wedges the moment the holder's screen locks.
-const alive = () => players().filter((p) => p.alive && !p.gone);
+// ...and who has said where they are. An unplaced phone has seat 0 by default, which is a real
+// angle with nobody sitting at it, and alive() is what ctx.towards() resolves a swipe against —
+// so without this a throw aimed at empty air lands on someone who never sat down, at an angle
+// they never chose. That is the one claim this project has, broken by a default value.
+// The placed flag only ever goes false -> true, so this can never drop anyone mid-round.
+// present() is deliberately untouched: the seat notices still wait on them, and a walk-up who
+// wanders off still cannot hold the room hostage.
+const alive = () => players().filter((p) => p.alive && !p.gone && p.placed);
 // Everyone with a live socket, placed or not. This is who the seat guard is waiting on.
 const present = () => players().filter((p) => !p.gone && p.ws.readyState === 1);
-const send = (ws, m) => ws.readyState === 1 && ws.send(JSON.stringify(m));
+// A phone that cannot keep up must drop frames, not accumulate them. At 20Hz a struggling
+// handset on venue wifi builds a send queue that is seconds deep and never recovers, and every
+// frame in it is already stale — this engine's whole timing model is deadlines computed against
+// a synced clock, so a late frame is worse than a missing one.
+const send = (ws, m) => ws.readyState === 1 && ws.bufferedAmount < 64000 && ws.send(JSON.stringify(m));
 
 // The context handed to every mode. Modes never touch sockets or the wire format.
 const ctx = {
@@ -121,6 +137,15 @@ function finish(winner, headline) {
   room.winner = winner ? winner.name : null;
   room.headline = headline || null;
   push();
+  clearTimeout(overTimer);
+  if (AUTO_LOBBY) overTimer = setTimeout(() => {
+    if (room.phase !== "over") return;
+    room.phase = "lobby";
+    room.winner = null;
+    room.headline = null;
+    room.notice = "";
+    push();
+  }, 8000);
 }
 
 /**
@@ -140,6 +165,7 @@ function uniqueName(raw) {
 }
 
 function startRound() {
+  clearTimeout(overTimer);
   const m = mode();
   // Derived fresh, never stored: see seatBlocker in modes.js.
   if (seatBlocker(present(), mode().min)) { room.phase = "lobby"; return push(); }
@@ -154,6 +180,7 @@ function startRound() {
 }
 
 function startGame(key) {
+  clearTimeout(overTimer);
   if (MODES[key]) room.modeKey = key;
   for (const p of players()) { p.alive = true; p.score = 0; }
   room.notice = "";
@@ -284,6 +311,7 @@ wss.on("connection", (ws, req) => {
     if (msg.t === "start") return startGame(msg.mode);
     if (msg.t === "reset") {
       clearTimeout(gapTimer);
+      clearTimeout(overTimer);
       room.phase = "lobby"; room.data = {}; room.winner = null; room.headline = null;
       room.notice = "room reset";
       for (const p of players()) { p.alive = true; p.score = 0; }   // seats survive a reset
