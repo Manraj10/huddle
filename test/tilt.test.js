@@ -1,0 +1,101 @@
+// The gyroscope maths, without a gyroscope.
+//
+// Nobody can run a test on a phone at the table, so every decision the sensor layer makes that
+// could feel wrong in the hand is made by a pure function and asserted here instead: calibration,
+// the dead zone, the rescale after it, the wrap at ±180, and the axis swap that happens when the
+// phone is turned on its side. That last one is the classic silent gyro bug — it works in
+// portrait, it is transposed in landscape, and it reads as drift rather than as axes.
+import test from "node:test";
+import assert from "node:assert/strict";
+
+import { smooth, stick, worthSending, wrapDeg } from "../public/tilt.js";
+
+const near = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) < eps, `${a} !~ ${b}`);
+
+test("angles wrap to (-180, 180]", () => {
+  near(wrapDeg(0), 0);
+  near(wrapDeg(190), -170);
+  near(wrapDeg(-190), 170);
+  near(wrapDeg(540), 180);
+  // The reason this exists: calibrating while holding the phone near upside-down puts neutral at
+  // 179 and a tiny real tilt at -179. Subtracting gives 358, which is full deflection from a
+  // movement of two degrees.
+  near(wrapDeg(-179 - 179), 2);
+});
+
+test("holding still where you calibrated is dead centre", () => {
+  const v = stick(37, -12, { beta: 37, gamma: -12 });
+  assert.deepEqual(v, { x: 0, y: 0 });
+});
+
+test("you can calibrate flat on a table or up at your chest and both are neutral", () => {
+  const flat = stick(4, 0, { beta: 4, gamma: 0 });
+  const chest = stick(62, 0, { beta: 62, gamma: 0 });
+  assert.deepEqual(flat, chest);
+  // And the same real tilt from either produces the same stick.
+  near(stick(14, 0, { beta: 4, gamma: 0 }).y, stick(72, 0, { beta: 62, gamma: 0 }).y);
+});
+
+test("the dead zone eats the shivers and nothing more", () => {
+  const n = { beta: 0, gamma: 0 };
+  assert.equal(stick(2.9, 0, n, 0, { dead: 3, range: 28 }).y, 0);
+  assert.ok(stick(3.6, 0, n, 0, { dead: 3, range: 28 }).y > 0);
+});
+
+test("full tilt still reaches full throw after the dead zone is cut out", () => {
+  // A bare subtraction leaves the stick topping out below 1, so the ship can never reach its
+  // real speed and the game feels sluggish for a reason nobody can name.
+  near(stick(28, 0, { beta: 0, gamma: 0 }, 0, { dead: 3, range: 28 }).y, 1);
+  near(stick(-28, 0, { beta: 0, gamma: 0 }, 0, { dead: 3, range: 28 }).y, -1);
+});
+
+test("past full tilt clamps instead of running away", () => {
+  near(stick(90, 0, { beta: 0, gamma: 0 }).y, 1);
+  near(stick(0, -80, { beta: 0, gamma: 0 }).x, -1);
+});
+
+test("turning the phone on its side swaps the axes, it does not drift", () => {
+  const n = { beta: 0, gamma: 0 };
+  // Upright: leaning the phone away from you drives the stick down the screen.
+  const portrait = stick(20, 0, n, 0);
+  assert.ok(portrait.y > 0 && portrait.x === 0);
+
+  // Rotated 90°: that same physical lean is now across the screen, and by the same amount.
+  const landscape = stick(20, 0, n, 90);
+  near(landscape.x, portrait.y);
+  assert.equal(landscape.y, 0);
+
+  // 270° is the other landscape, and it is the mirror of 90°.
+  const other = stick(20, 0, n, 270);
+  near(other.x, -portrait.y);
+
+  // 180° inverts both.
+  const upside = stick(20, 7, n, 180);
+  const up = stick(20, 7, n, 0);
+  near(upside.x, -up.x);
+  near(upside.y, -up.y);
+});
+
+test("every screen rotation preserves the magnitude of the tilt", () => {
+  const n = { beta: 0, gamma: 0 };
+  const mag = (v) => Math.hypot(v.x, v.y);
+  const base = mag(stick(17, -9, n, 0));
+  for (const a of [90, 180, 270, 360, -90]) near(mag(stick(17, -9, n, a)), base, 1e-9);
+});
+
+test("smoothing converges and never overshoots", () => {
+  let v = 0;
+  for (let i = 0; i < 200; i++) v = smooth(v, 1, 16, 70);
+  assert.ok(v > 0.99 && v <= 1, `settled at ${v}`);
+  // One frame of a 60Hz feed moves part of the way, not all of it — that is the whole point.
+  assert.ok(smooth(0, 1, 16, 70) < 0.3);
+  // A phone delivering half the frame rate covers the same ground per unit of TIME, not per frame.
+  near(smooth(0, 1, 32, 70), 1 - Math.pow(1 - smooth(0, 1, 16, 70), 2), 1e-9);
+});
+
+test("a phone at rest stops putting packets on the wire", () => {
+  const at = { x: 0.4, y: -0.2 };
+  assert.equal(worthSending(at, { x: 0.405, y: -0.2 }), false);
+  assert.equal(worthSending(at, { x: 0.44, y: -0.2 }), true);
+  assert.equal(worthSending(null, at), true, "the first reading always goes");
+});
