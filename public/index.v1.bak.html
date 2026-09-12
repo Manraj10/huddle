@@ -1,0 +1,164 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Blindside</title>
+<style>
+  :root { --ink:#f2f5fa; --dim:#8d97ab; --hot:#ff4d3d; --cool:#12161f; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { height:100%; margin:0; overscroll-behavior:none; touch-action:none; }
+  body { background:#0a0d14; color:var(--ink); font:600 17px/1.4 ui-sans-serif,system-ui,-apple-system,sans-serif;
+         display:grid; place-items:center; text-align:center; user-select:none; }
+  #app { position:fixed; inset:0; display:grid; place-items:center; padding:22px; transition:background .18s; }
+  h1 { font-size:26px; letter-spacing:.22em; text-transform:uppercase; margin:0 0 6px; }
+  .dim { color:var(--dim); font-weight:500; }
+  input { font:600 20px ui-sans-serif,system-ui,sans-serif; padding:14px 16px; border-radius:12px;
+          border:1px solid #2b3345; background:#141a26; color:var(--ink); width:min(78vw,320px); text-align:center; }
+  button { font:700 18px ui-sans-serif,system-ui,sans-serif; padding:16px 30px; border-radius:14px; border:0;
+           background:var(--ink); color:#0a0d14; margin-top:14px; }
+  button.ghost { background:#1a2130; color:var(--ink); }
+  .huge { font-size:clamp(54px,20vw,140px); line-height:1; font-weight:800; letter-spacing:-.02em; }
+  .ring { position:fixed; inset:0; pointer-events:none; }
+  .ring span { position:absolute; transform:translate(-50%,-50%); font-size:13px; font-weight:700; color:#9aa4b8; }
+  .pulse { animation:p .7s infinite alternate; }
+  @keyframes p { from { transform:scale(1); } to { transform:scale(1.06); } }
+  @media (prefers-reduced-motion:reduce) { .pulse { animation:none; } }
+</style>
+
+<div id="app"></div>
+<div class="ring" id="ring"></div>
+
+<script type="module">
+const app = document.getElementById("app"), ring = document.getElementById("ring");
+const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`);
+let me = null, S = null, offset = 0, audio = null, tone = null;
+
+// ---- clock sync: five round trips, keep the median offset ----
+const offsets = [];
+function ping() {
+  const c = Date.now();
+  ws.send(JSON.stringify({ t: "ping", c }));
+  window.__pingAt = c;
+}
+function onPong(m) {
+  const rtt = Date.now() - m.c;
+  offsets.push(m.s - (m.c + rtt / 2));
+  offsets.sort((a, b) => a - b);
+  offset = offsets[Math.floor(offsets.length / 2)];
+}
+const serverNow = () => Date.now() + offset;
+
+// ---- sound: one oscillator whose pitch rises as the fuse burns ----
+function unlockAudio() {
+  if (audio) return;
+  audio = new (window.AudioContext || window.webkitAudioContext)();
+  tone = audio.createOscillator();
+  const gain = audio.createGain();
+  gain.gain.value = 0;
+  tone.type = "sawtooth"; tone.frequency.value = 110;
+  tone.connect(gain); gain.connect(audio.destination); tone.start();
+  tone.gain = gain;
+}
+function setTone(on, urgency) {
+  if (!tone) return;
+  tone.gain.gain.setTargetAtTime(on ? 0.05 : 0, audio.currentTime, 0.08);
+  tone.frequency.setTargetAtTime(110 + urgency * 500, audio.currentTime, 0.15);
+}
+const buzz = (ms) => navigator.vibrate?.(ms);   // Android only; iOS Safari has no vibration
+
+// ---- swipe: direction picks the person you throw to ----
+let down = null;
+addEventListener("pointerdown", (e) => { down = { x: e.clientX, y: e.clientY }; });
+addEventListener("pointerup", (e) => {
+  if (!down) return;
+  const dx = e.clientX - down.x, dy = e.clientY - down.y;
+  down = null;
+  if (Math.hypot(dx, dy) < 40) return;
+  if (!S?.you?.holding) return;
+  ws.send(JSON.stringify({ t: "pass", angle: Math.atan2(dy, dx) }));
+  buzz(20);
+});
+
+ws.onopen = () => { for (let i = 0; i < 5; i++) setTimeout(ping, i * 120); render(); };
+ws.onclose = () => { S = null; app.innerHTML = `<div><h1>Dropped</h1><p class="dim">Reload to rejoin.</p></div>`; };
+ws.onmessage = (ev) => {
+  const m = JSON.parse(ev.data);
+  if (m.t === "pong") return onPong(m);
+  if (m.t === "hello") { me = m.id; return; }
+  if (m.t === "state") { S = m; render(); }
+};
+
+function join(name) {
+  unlockAudio();
+  ws.send(JSON.stringify({ t: "join", name }));
+}
+
+function drawRing() {
+  ring.innerHTML = "";
+  if (!S || S.phase !== "live" || !S.you?.holding) return;
+  const cx = innerWidth / 2, cy = innerHeight / 2, r = Math.min(cx, cy) * 0.78;
+  for (const p of S.players) {
+    if (p.id === me || !p.alive) continue;
+    const el = document.createElement("span");
+    el.textContent = p.name;
+    el.style.left = `${cx + Math.cos(p.seat) * r}px`;
+    el.style.top = `${cy + Math.sin(p.seat) * r}px`;
+    ring.append(el);
+  }
+}
+
+function render() {
+  if (!S) {
+    app.innerHTML = `<div><h1>Blindside</h1><p class="dim">Only the holder sees the charge.<br>Pass it before it blows.</p>
+      <div><input id="n" placeholder="your name" maxlength="12"></div><button id="j">Join</button></div>`;
+    document.getElementById("j").onclick = () => join(document.getElementById("n").value || "player");
+    document.getElementById("n").onkeydown = (e) => e.key === "Enter" && document.getElementById("j").click();
+    return;
+  }
+  const you = S.you;
+  const live = S.phase === "live";
+  const holding = live && you?.holding;
+  const burn = live ? Math.max(0, S.fuseAt - serverNow()) : 0;
+  const urgency = live ? Math.min(1, 1 - burn / 26000) : 0;
+
+  setTone(holding, urgency);
+  app.style.background = holding ? `rgb(${90 + urgency * 160},${40 - urgency * 30},${44})` : "#0a0d14";
+
+  if (S.phase === "lobby") {
+    app.innerHTML = `<div><h1>Lobby</h1>
+      <p class="dim">${S.players.map((p) => p.name).join(" · ") || "nobody yet"}</p>
+      <p class="dim">${S.players.length < 2 ? "need at least 2 phones" : "everyone in? start it"}</p>
+      <button id="s" ${S.players.length < 2 ? "disabled" : ""}>Start</button></div>`;
+    const b = document.getElementById("s");
+    if (b) b.onclick = () => ws.send(JSON.stringify({ t: "start" }));
+  } else if (S.phase === "over") {
+    app.innerHTML = `<div><h1>${S.winner || "nobody"} wins</h1>
+      <p class="dim">${you?.alive ? "that's you" : "better luck next round"}</p>
+      <button id="s" class="ghost">Again</button></div>`;
+    document.getElementById("s").onclick = () => ws.send(JSON.stringify({ t: "start" }));
+  } else if (!you?.alive) {
+    app.innerHTML = `<div><h1 class="dim">Out</h1>
+      <p class="dim">${S.lastBoom?.id === me ? "it went off in your hands" : `${S.lastBoom?.name || "someone"} went first`}</p>
+      <p class="dim">${S.players.filter((p) => p.alive).length} still in</p></div>`;
+  } else if (holding) {
+    app.innerHTML = `<div><div class="huge pulse">${(burn / 1000).toFixed(1)}</div>
+      <p>YOU HAVE IT</p><p class="dim">swipe toward someone</p></div>`;
+  } else if (live) {
+    app.innerHTML = `<div><div class="huge dim">?</div><p class="dim">${S.inFlight ? "in the air" : "someone has it"}</p></div>`;
+  } else if (S.phase === "gap") {
+    app.innerHTML = `<div><h1>${S.lastBoom?.name || "someone"} is out</h1><p class="dim">next round in a moment</p></div>`;
+    buzz(60);
+  }
+  drawRing();
+}
+
+// Keep the countdown moving between server messages.
+setInterval(() => { if (S && S.phase === "live") render(); }, 100);
+setInterval(ping, 4000);
+addEventListener("resize", drawRing);
+
+// Phones must not sleep mid-round.
+if ("wakeLock" in navigator) {
+  const hold = () => navigator.wakeLock.request("screen").catch(() => {});
+  hold(); addEventListener("visibilitychange", () => document.visibilityState === "visible" && hold());
+}
+</script>
