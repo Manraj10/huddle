@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { aimAngle, smooth, stick, viewportYaw, worthSending, wrapDeg } from "../public/tilt.js";
+import { aimAngle, aimDue, smooth, stick, viewportYaw, worthSending, wrapDeg } from "../public/tilt.js";
 
 const near = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) < eps, `${a} !~ ${b}`);
 const deg2rad = (d) => d * Math.PI / 180;
@@ -148,4 +148,30 @@ test("aim always comes back wrapped, so it can go straight into seat geometry", 
     const a = aimAngle(screen, viewportYaw(alpha, 0), viewportYaw(0, 0));
     assert.ok(a > -Math.PI - 1e-9 && a <= Math.PI + 1e-9, `${a} out of range`);
   }
+});
+
+test("an aim keeps beating while the phone is held perfectly still", () => {
+  // The losing version of this only sent on movement. Facing the thrower and holding steady is
+  // the correct play in Standoff, and it made the player go silent: the server ages aims out
+  // after HUDDLE_AIM_STALE_MS, a stale aim blocks nothing, and the block was lost by doing the
+  // right thing.
+  const held = 1.0;
+  assert.equal(aimDue(held, held, 40), false, "not faster than the rate limit");
+  assert.equal(aimDue(held, held, 120), false, "still holding, not due yet");
+  assert.equal(aimDue(held, held, 260), true, "held still, and now overdue — send it");
+  // Comfortably inside a 1500ms stale window even if a couple of beats are dropped.
+  assert.ok(260 * 4 < 1500);
+});
+
+test("a turning phone streams rather than waiting for the beat", () => {
+  assert.equal(aimDue(1.0, 1.5, 60), true, "moved plenty");
+  assert.equal(aimDue(1.0, 1.005, 60), false, "that is sensor noise, not a turn");
+  assert.equal(aimDue(null, 1.0, 60), true, "the first aim always goes");
+});
+
+test("aim due-ness wraps at the top of the circle", () => {
+  // Turning through north is a tiny movement and a huge subtraction.
+  const near = Math.PI - 0.005;
+  assert.equal(aimDue(near, -near, 60), false, "0.01 radians across the wrap is not a turn");
+  assert.equal(aimDue(near, -near, 300), true, "but the heartbeat still fires");
 });

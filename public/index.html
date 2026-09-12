@@ -98,7 +98,7 @@ body {
 }
 .title {
   font: 700 clamp(15px, 4.6vw, 20px)/1.15 var(--text);
-  letter-spacing: .18em; text-transform: uppercase; margin-top: 14px; opacity: .92;
+  letter-spacing: .14em; margin-top: 14px; opacity: .92;
 }
 .sub { font: 400 15px/1.4 var(--text); color: var(--dim); margin: 8px auto 0; max-width: 26ch; }
 /* No aim yet — pointing into the gap between two people. A dash reads as a broken screen, so it
@@ -116,7 +116,7 @@ body {
 /* -------------------------------------------------------------------- chrome */
 .scores {
   position: fixed; top: 0; left: 0; right: 0; z-index: 3;
-  padding: 9px 62px 9px 14px; display: flex; gap: 11px; justify-content: center;
+  padding: calc(9px + env(safe-area-inset-top)) calc(62px + env(safe-area-inset-right)) 9px calc(14px + env(safe-area-inset-left)); display: flex; gap: 11px; justify-content: center;
   flex-wrap: nowrap; overflow: hidden;      /* never a second line: it lands on the ring names */
   font: 600 11px/1 var(--text); letter-spacing: .12em; text-transform: uppercase; color: #7b7f94;
   pointer-events: none;
@@ -137,14 +137,16 @@ body[data-screen="join"] .reset { display: none; }
 .scores .me { color: var(--you); }
 
 .notice {
-  position: fixed; left: 0; right: 0; bottom: 14px; z-index: 3; padding: 0 16px;
+  position: fixed; left: 0; right: 0; bottom: calc(20px + env(safe-area-inset-bottom)); z-index: 3;
+  padding: 0 calc(16px + env(safe-area-inset-left)) 0 calc(16px + env(safe-area-inset-right));
   text-align: center; font: 600 13px/1.3 var(--text); letter-spacing: .06em;
   text-transform: uppercase; color: var(--dim); pointer-events: none;
 }
 .on-light .notice { color: #5a5f73; }
 
 .reset {
-  position: fixed; top: 6px; right: 8px; z-index: 6;
+  position: fixed; top: calc(6px + env(safe-area-inset-top)); right: calc(8px + env(safe-area-inset-right)); z-index: 6;
+  min-height: 44px;                                   /* a real touch target, not a 28px sliver */
   background: #17141f; color: #7b7f94; border: 1px solid var(--line); border-radius: 999px;
   padding: 8px 13px; margin: 0; font: 600 11px/1 var(--text); letter-spacing: .14em;
 }
@@ -174,11 +176,19 @@ body[data-screen="join"] .reset { display: none; }
 /* It is in the air AT YOU. A band at the top, closing over the flight — the top, so it can never
    be confused with the fuse along the bottom. Driven from the arrival DEADLINE against the synced
    clock, never from a number the server rendered. */
-.inbound { position: fixed; left: 0; right: 0; top: 0; height: 10px; z-index: 5; background: #00000030; }
+.inbound {
+  position: fixed; left: 0; right: 0; top: 0; z-index: 5; background: #00000030;
+  height: calc(10px + env(safe-area-inset-top));
+  padding-top: env(safe-area-inset-top);
+}
 .inbound[hidden] { display: none; }
 .inbound i { display: block; height: 100%; width: 100%; background: var(--inbound-ink); transform-origin: right center; }
 
-.fuse { position: fixed; left: 0; right: 0; bottom: 0; height: 14px; z-index: 4; background: #ffffff10; }
+.fuse {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 4; background: #ffffff10;
+  height: calc(14px + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);        /* the bar itself stays above the home indicator */
+}
 .fuse[hidden] { display: none; }
 .fuse i { display: block; height: 100%; width: 100%; background: var(--ink); transform-origin: left center; }
 
@@ -453,7 +463,7 @@ button:disabled { opacity: .38; }
 <div class="fuse" id="fuse" hidden aria-hidden="true"><i id="fuseFill"></i></div>
 
 <script type="module">
-import { aimAngle, askForTilt, attachTilt } from "/tilt.js";
+import { aimAngle, aimDue, askForTilt, attachTilt } from "/tilt.js";
 import { nearest } from "/seats.js";
 const $ = (id) => document.getElementById(id);
 const app = $("app"), ringEl = $("ring"), play = $("play"), hero = $("hero");
@@ -514,7 +524,7 @@ const buzz = (ms) => navigator.vibrate?.(ms);
 //
 // The client sends the STICK, never a position. The server integrates it. A phone that could
 // declare where its ship is could declare that it is standing on top of yours.
-let tilt = null, tiltWhy = null, tiltSent = 0, seatYaw = null, aimSent = 0, aimLast = null;
+let tilt = null, tiltWhy = null, tiltSent = 0, seatYaw = null, aimSent = 0, aimLast = null, aimTimer = null;
 
 /** Who this angle would actually reach, using the same arithmetic the server will use. */
 function whoIsAt(angle) {
@@ -559,6 +569,8 @@ function tiltPipe(x, y) {
 // is sitting there, which is both hard rule 2 and the entire claim: your input targets a human
 // being at the angle they are actually sitting, and the phone is not trusted to say who that is.
 const POINTING = -Math.PI / 2;
+// Comfortably inside the server's stale window, and 4 messages a second per phone is nothing.
+const AIM_BEAT = 250;
 
 function aimPipe() {
   if (!joined || !ws || ws.readyState !== 1) return;
@@ -567,9 +579,7 @@ function aimPipe() {
   if (yaw == null || seatYaw == null) return;         // no sensor: the swipe carries the aim instead
   const angle = aimAngle(POINTING, yaw, seatYaw);
   const t = Date.now();
-  if (t - aimSent < 50) return;                       // 20Hz is plenty for a body turning
-  // A phone lying still on a table should put nothing on the wire at all.
-  if (aimLast != null && Math.abs(Math.atan2(Math.sin(angle - aimLast), Math.cos(angle - aimLast))) < 0.02) return;
+  if (!aimDue(aimLast, angle, t - aimSent, { beat: AIM_BEAT })) return;
   aimSent = t;
   aimLast = angle;
   ws.send(JSON.stringify({ t: "act", a: "aim", angle }));
@@ -586,7 +596,12 @@ async function armTilt() {
   const verdict = await askForTilt();
   tiltWhy = verdict;
   if (verdict !== "granted") return;
-  tilt = attachTilt({ onStick: (x, y) => { tiltPipe(x, y); aimPipe(); }, hz: 30 });
+  tilt = attachTilt({ onStick: tiltPipe, hz: 30 });
+  // Its OWN loop, not the stick's. onStick fires only when the stick has moved, so hanging the
+  // aim off it meant a phone held perfectly still never reached the heartbeat at all — which is
+  // precisely the player who has just turned to face the person who threw the bomb at them.
+  clearInterval(aimTimer);
+  aimTimer = setInterval(aimPipe, 80);
 }
 
 /** Whatever you are holding when a round starts is neutral. Without this, half a room is fighting
@@ -781,8 +796,14 @@ let modeSig = "";
 const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 function drawModes() {
-  const enough = (S.players || []).length;
-  const sig = S.modes.map((m) => `${m.key}${m.key === S.mode ? "*" : ""}${m.min <= enough}`).join("|");
+  // Count the way the SERVER counts. startRound refuses unless `min` players have actually placed
+  // a seat — alive() requires it and seatBlocker checks it — but this counted everyone who had
+  // merely joined. So a card sat there looking live, someone tapped it, and the room bounced
+  // straight back to the lobby with no explanation. A control that is not going to work has to
+  // look like it is not going to work.
+  const seated = seatData().filter((q) => q.placed !== false).length;
+  const enough = seated;
+  const sig = S.modes.map((m) => `${m.key}${m.key === S.mode ? "*" : ""}${m.min <= enough}`).join("|") + `/${seated}`;
   if (sig === modeSig) return;
   const wasOpen = modesEl.querySelector("details")?.open;
   modeSig = sig;
@@ -794,7 +815,7 @@ function drawModes() {
 
   const card = (m, cls) => `
     <button class="${cls}" data-k="${esc(m.key)}" ${ready(m) ? "" : "disabled"}>
-      <b>${esc(m.name)}</b><em>${ready(m) ? "START" : `${m.min}+`}</em>
+      <b>${esc(m.name)}</b><em>${ready(m) ? "START" : `${m.min - seated} MORE SEAT${m.min - seated === 1 ? "" : "S"}`}</em>
       <small>${esc(m.blurb)}</small>
     </button>`;
 
@@ -996,6 +1017,28 @@ function show(next) {
   play.hidden = next !== "play";
 }
 function text(el, s) { if (el.textContent !== s) el.textContent = s; }
+
+let scoreSig = "";
+function drawScores() {
+  const list = S.players || [];
+  const mine = myId();
+  const sig = list.map((p) => `${p.id}:${p.name}:${p.alive}:${p.score}`).join("|") + `/${mine}`;
+  if (sig === scoreSig) return;
+  scoreSig = sig;
+  const box = $("scores");
+  box.textContent = "";
+  for (const p of list) {
+    const el = document.createElement("span");
+    el.className = `${p.alive ? "" : "out"}${p.id === mine ? " me" : ""}`.trim();
+    el.textContent = p.name;                          // text, never markup
+    if (p.score) {
+      const i = document.createElement("i");
+      i.textContent = ` ${p.score}`;
+      el.append(i);
+    }
+    box.append(el);
+  }
+}
 function fitBig() {
   const key = `${bigEl.textContent.length}|${innerWidth}|${getComputedStyle(app).getPropertyValue("--gutter")}`;
   if (fitBig.key === key) return;
@@ -1041,8 +1084,10 @@ function paint() {
   else if (v.lobby || (S.phase === "lobby" && v.seatPicker)) show("lobby");
   else show("play");
 
-  $("scores").innerHTML = (S.players || []).map((p) =>
-    `<span class="${p.alive ? "" : "out"}${p.id === myId() ? " me" : ""}">${p.name}${p.score ? ` <i>${p.score}</i>` : ""}</span>`).join("");
+  // Player names are typed by strangers at an expo and this used to go straight into innerHTML,
+  // on every animation frame. Built as nodes now, with the name set as text — and only rebuilt
+  // when it actually changed, rather than sixty times a second.
+  drawScores();
   text($("notice"), S.phase === "live" ? "" : (S.notice || ""));
 
   if (onScreen === "lobby") {
@@ -1139,7 +1184,11 @@ function paint() {
   app.style.background = bg || "var(--idle)";
   app.style.color = ink || "var(--ink)";
   app.classList.toggle("on-light", !!(v.flashAt && serverNow() >= v.flashAt) || S.phase === "over");
-  app.style.setProperty("--pulse", `${Math.round(720 - urgency * 540)}ms`);
+  // Floored at 340ms. The pulse used to bottom out at 180ms, which is 5.5 full cycles a second —
+  // past WCAG 2.3.1's three-flashes-a-second limit, on a full-screen colour field, aimed at a
+  // room of strangers one of whom may be photosensitive. Urgency past that point is carried by
+  // colour and by the closing edge instead.
+  app.style.setProperty("--pulse", `${Math.max(340, Math.round(720 - urgency * 380))}ms`);
   app.style.setProperty("--tense", `${(1 + urgency * 6).toFixed(1)}px`);
 
   chip(shape, label, title);
@@ -1161,7 +1210,10 @@ function paint() {
   fitBig();
 
   const ring = arenaOn ? null : v.ring;
-  app.style.setProperty("--gutter", ring?.length ? "clamp(56px, 17vw, 96px)" : "16px");
+  // 17vw each side is 128px of a 375px phone handed to 11px names, which squeezed the hero hard
+  // enough that fitBig shrank a seven-letter name to 58px — a 6mm cap height, under what anyone
+  // reads at arm's length. The ring names get a lane, not a third of the screen.
+  app.style.setProperty("--gutter", ring?.length ? "clamp(34px, 9vw, 58px)" : "16px");
   drawRing(ring);
 
   fuseEl.hidden = !(v.tone && S.phase === "live");
@@ -1194,6 +1246,11 @@ requestAnimationFrame(frame);
 setInterval(() => { if (document.hidden) paint(); }, 200);
 
 addEventListener("resize", () => { fitBig.key = null; ringSig = ""; placeSeats(); });
+// The hero is sized by measuring it. Until the webfont arrives that measurement is of the
+// fallback, and fitBig's memo key has no font in it — so on a slow venue connection the hero
+// would keep its fallback-measured size for the life of the page. One reset when the real face
+// lands fixes it for whatever the fallback happened to be.
+document.fonts?.ready.then(() => { fitBig.key = null; });
 addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
   ac?.resume().catch(() => {});

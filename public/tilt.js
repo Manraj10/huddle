@@ -182,3 +182,21 @@ export function aimAngle(screenAngle, yawNow, yawRef) {
   const a = screenAngle - turned;
   return Math.atan2(Math.sin(a), Math.cos(a));
 }
+
+/**
+ * Should this aim go on the wire now?
+ *
+ * Two jobs at once, and getting only the first one right is how a game breaks. A phone that is
+ * TURNING should stream, so the name under your thumb keeps up with your body. A phone that is
+ * HELD STILL must still speak, because the server ages aims out and a stale aim blocks nothing —
+ * so the player who turns to face the person who threw it and then holds the phone dead steady,
+ * which is exactly the right thing to do, would otherwise go silent, age out, and lose.
+ *
+ * `sinceMs` is the time since the last message actually sent.
+ */
+export function aimDue(last, angle, sinceMs, { minGap = 50, beat = 250, epsilon = 0.02 } = {}) {
+  if (sinceMs < minGap) return false;                  // never faster than this, however fast you turn
+  if (last == null) return true;
+  const moved = Math.abs(Math.atan2(Math.sin(angle - last), Math.cos(angle - last)));
+  return moved >= epsilon || sinceMs >= beat;
+}

@@ -244,6 +244,64 @@ try {
     await sleep(200);
   }
 
+  console.log("standoff: an aim that stops being sent stops being true");
+  {
+    // The client decides WHEN to send an aim; the server decides how long one counts for. A phone
+    // held perfectly still that stops sending goes stale — so the player who has just turned to
+    // face the person who threw the bomb at them would lose the block by doing the right thing.
+    // This proves the server contract the client's heartbeat has to satisfy; public/tilt.js
+    // aimDue() proves the client actually beats.
+    //
+    // The HOLDER beats throughout both rounds. Without that its own aim ages out too, the throw is
+    // refused outright, and the result says nothing about the target — which is exactly how the
+    // first version of this test lied.
+    const run = async (targetKeepsBeating) => {
+      phones[0].send({ t: "start", mode: "standoff" });
+      await until(phones[0], (m) => m.phase === "live" && m.mode === "standoff", "standoff", 5000);
+      await sleep(200);
+      const OPP = { 0: 2, 1: 3, 2: 0, 3: 1 };
+      for (let i = 0; i < 4; i++) phones[i].act({ a: "aim", angle: ANGLES[OPP[i]] });
+      await sleep(250);
+      const holder = phones.find((ph) => ph.latest?.view?.title === "YOU HAVE IT");
+      if (!holder) return null;
+      const hi = phones.indexOf(holder);
+      const target = phones[OPP[hi]];
+
+      const hb = setInterval(() => holder.act({ a: "aim", angle: ANGLES[OPP[hi]] }), 250);
+      target.act({ a: "aim", angle: ANGLES[hi] });          // face the thrower, once
+      const tb = targetKeepsBeating
+        ? setInterval(() => target.act({ a: "aim", angle: ANGLES[hi] }), 250)
+        : null;
+
+      await until(holder, (m) => m.view?.throwable === true, "armed", 5000);
+      await sleep(1700);                                    // longer than HUDDLE_AIM_STALE_MS
+      holder.act({ a: "tap" });
+      const inAir = await until(target, (m) => m.view?.title === "INCOMING", "in the air", 2500);
+      const bounced = inAir
+        ? await until(holder, (m) => m.view?.title === "YOU HAVE IT", "bounced", 3000)
+        : null;
+      clearInterval(hb);
+      if (tb) clearInterval(tb);
+      phones[0].send({ t: "reset" });
+      await sleep(250);
+      for (let i = 0; i < 4; i++) phones[i].seat(ANGLES[i]);
+      await sleep(200);
+      return { threw: !!inAir, blocked: !!bounced };
+    };
+
+    const silent = await run(false);
+    is(silent && silent.threw, "the throw goes (the holder is beating, so its own aim is fresh)",
+      JSON.stringify(silent));
+    is(silent && silent.threw && !silent.blocked,
+      "a target that faced them once and went quiet is stale, and does not block",
+      "a silent target blocked — the stale window is not doing its job");
+
+    const beating = await run(true);
+    is(beating && beating.threw && beating.blocked,
+      "the same hold, the same direction, but beating — and it DOES block",
+      `holding steady lost the block: ${JSON.stringify(beating)}`);
+  }
+
   console.log("a bullet nobody can see");
   // The claim is that while a shot crosses the real gap between two handsets it is on the server
   // and on NO phone. Measured, not asserted: the server unions the object ids it actually put on
