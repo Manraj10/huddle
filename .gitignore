@@ -5,3 +5,4 @@ tunnel.log
 *.bak.js
 *.bak.html
 data/*.json
+_probe.mjs
