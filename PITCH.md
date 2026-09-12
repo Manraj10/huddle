@@ -74,8 +74,8 @@ Prize targets:
 - People's Favourite
 - Best Design
 - MLH Vultr
-- MLH MongoDB Atlas
-- MLH ElevenLabs
+- MLH MongoDB Atlas (only if the stats writer is pointed at Atlas first — today it writes a JSON file)
+- MLH ElevenLabs (only if the room-screen announcer gets built — there is no speech today)
 
 Our stack stays deliberately lean: no login friction, no wallet, no token gimmick, no bolt-on “startup” layer. The product is strongest when it feels like a room game, not an app trying to win a prize by adding unrelated complexity.
 

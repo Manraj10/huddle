@@ -269,6 +269,7 @@ wss.on("connection", (ws, req) => {
       return push();
     }
     if (msg.t === "act" && room.phase === "live" && me.alive) {
+      lastChange = now();          // a room that is playing is not a room that is wedged
       if (mode().act(ctx, me, msg)) push();
     }
   });

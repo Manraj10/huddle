@@ -18,7 +18,11 @@ Priority awards:
 - Multiplayer: the game only works when players are physically in the same room
 - People's Favourite: the room-level energy is obvious within seconds and the audience feels the reaction immediately
 - Best Design: the phone interface and room screen are designed to be legible from across a table, without reading tiny text
-- Vultr / MongoDB / ElevenLabs: the product uses a real backed server, actual live metrics, and a spoken room reaction layer instead of decorative extras
+- Vultr: the game server genuinely runs there. WebSockets need a real box, so this one is earned.
+- MongoDB Atlas: NOT EARNED YET. Stats persist to a JSON file on disk (`deploy/stats.js`). Either
+  point that writer at Atlas before submitting, or drop the claim. Do not submit it as-is.
+- ElevenLabs: NOT EARNED YET. There is no speech in the product — the only audio is one oscillator.
+  Either build the announcer on the room screen, or drop the claim.
 
 ## Why the product is not a startup gimmick
 

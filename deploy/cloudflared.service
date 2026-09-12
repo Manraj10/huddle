@@ -6,6 +6,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=huddle
+# WARNING: this is a QUICK tunnel. Every restart mints a brand-new *.trycloudflare.com hostname,
+# so systemd stays green while every printed QR code silently stops working. Before the expo,
+# either run a NAMED tunnel (cloudflared tunnel run <name>, requires a login and a domain) or put
+# the box behind Caddy on a real hostname and drop this unit.
 ExecStart=/usr/local/bin/cloudflared tunnel --url http://127.0.0.1:8080 --no-autoupdate
 Restart=always
 RestartSec=3
