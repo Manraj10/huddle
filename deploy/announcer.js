@@ -24,7 +24,12 @@
 // through their inference partners, a Grok key from the SpaceXAI table, a vLLM or SGLang server on
 // a laptop, or anything else a sponsor hands over. Checked first, so it wins when set.
 
-const TIMEOUT_MS = Number(process.env.HUDDLE_CALL_TIMEOUT_MS) || 2500;
+// 2.5s suits Gemini and Grok, which answer in well under a second. A reasoning model does not:
+// K2 measured 3.8-5.9s because it thinks before it writes. Left at 2.5s every K2 line times out
+// and the room is silent for a reason nobody can see. The ceiling is the 8s the server holds the
+// "over" phase for — a line that arrives after that is discarded anyway, so never wait longer.
+const TIMEOUT_MS = Number(process.env.HUDDLE_CALL_TIMEOUT_MS)
+  || (process.env.HUDDLE_LLM_BASE_URL ? 7000 : 2500);
 const COOLDOWN_MS = Number(process.env.HUDDLE_CALL_COOLDOWN_MS) || 4000;
 const MAX_CHARS = 120;
 
