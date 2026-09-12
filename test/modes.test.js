@@ -510,6 +510,38 @@ test("duel: a shot straight up still crosses the screen", () => {
   assert.ok(Math.abs(d.bullets[0].vx) > 0.1, "a bullet that never leaves your phone is not the game");
 });
 
+test("duel: a shot carries how far it has travelled, so a lap is visible", () => {
+  // The mode's best moment is your own shot arriving back from the far side after crossing other
+  // people's phones. If the phone cannot tell that bullet from one fired next door a second ago,
+  // nobody in the room ever learns that the table wraps — and the closed ring is the whole thing
+  // that separates this from two phones in a straight line.
+  const r = room(["ALFA", "BRAVO", "CHARLIE", "DELTA"], { seats: [0, 1.5, 3, 4.5] }).play("duel");
+  const d = r.data;
+  const me = r.players.find((p) => p.id === d.order[0]);
+  for (const id of d.order.slice(1)) d.ship[id].y = 0.97;      // everyone ducks
+  r.act(me.name, { a: "fire", dir: 0 });
+
+  const seen = new Set();
+  for (let i = 0; i < 400; i++) {
+    r.advance(25);
+    r.tick();
+    for (const q of r.players) {
+      const v = r.view(q.name);
+      for (const o of v.objects || []) {
+        assert.equal(typeof o.hops, "number", "every shot reports its hops");
+        assert.equal(typeof o.id, "number", "and keeps a stable id for interpolation");
+        seen.add(o.hops);
+      }
+    }
+    if (!d.bullets.length) break;
+  }
+  assert.ok(seen.has(0), "it was fresh once");
+  assert.ok([...seen].some((h) => h > 0), "and it was seen after crossing a gap");
+
+  // The arena also says how many phones make up the ring, so the phone knows what a full lap is.
+  assert.equal(r.view("ALFA").seats, 4);
+});
+
 test("duel: a bullet in the gap between two phones is on nobody's screen", () => {
   const r = room(["ALFA", "BRAVO"], { seats: [0, 3] }).play("duel");
   const d = r.data;

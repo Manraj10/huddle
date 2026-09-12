@@ -654,6 +654,7 @@ addEventListener("pointerup", (e) => {
     if (!you) return;
     const dir = Math.atan2(e.clientY / innerHeight - you.y, e.clientX / innerWidth - you.x);
     ws?.send(JSON.stringify({ t: "act", a: "fire", dir }));
+    firedAt = Date.now();
     buzz(12);
     return;
   }
@@ -871,6 +872,7 @@ function drawRing(list) {
 // angle from your ship to where you tapped. Tilt sends {t:'act', a:'tilt', x, y}.
 const arena = $("arena"), actx = arena.getContext("2d");
 let frames = [null, null];
+let lastHp = null, hitAt = -9999, firedAt = -9999;
 function feedArena(v) {
   const last = frames[1];
   if (!last || last.at !== (S.now || 0)) frames = [last || { v, at: S.now }, { v, at: S.now || Date.now() }];
@@ -941,36 +943,80 @@ function drawArena() {
   if (hasLeft) edge(0, W * 0.14, near.left, nb.left, 1);
   if (hasRight) edge(W * 0.86, W * 0.14, near.right, nb.right, -1);
 
-  // ---- bullets, with a trail so you can read direction at a glance ---------------------
+  // ---- bullets ------------------------------------------------------------------------
+  // A shot carries how many gaps it has crossed, and it visibly ages as it goes: bigger, hotter,
+  // a longer tail, and once it has been the whole way round the ring it is white with a halo.
+  // That is what makes the closed loop READABLE. The mode's best moment is your own shot arriving
+  // back on your screen from the far side after crossing three other people's phones, and if it
+  // looks like every other bullet then nobody in the room ever learns that the table wraps.
+  const rings = Math.max(2, cur.seats || 2);
   for (const o of cur.objects || []) {
     const q = (o.id != null && was.get(o.id)) || o;
     const x = lerp(q.x, o.x) * W, y = lerp(q.y, o.y) * H;
-    const r = (o.r || 0.03) * W;
+    const hops = o.hops || 0;
+    const age = clamp01(hops / Math.max(1, rings - 1));       // 0 = fresh, 1 = been all the way round
+    const lapped = hops >= rings - 1;
+    const r = (o.r || 0.03) * W * (1 + age * 0.85);
+    const col = lapped ? "#ffffff" : hops > 0 ? "#ffc857" : (o.c || "#f4f6fb");
     const tx = (q.x - o.x) * W, ty = (q.y - o.y) * H;
     if (Math.hypot(tx, ty) > 0.5) {
-      const g = actx.createLinearGradient(x, y, x + tx * 6, y + ty * 6);
-      g.addColorStop(0, o.c || "#f4f6fb");
+      const len = 6 + age * 10;
+      const g = actx.createLinearGradient(x, y, x + tx * len, y + ty * len);
+      g.addColorStop(0, col);
       g.addColorStop(1, "transparent");
       actx.strokeStyle = g;
       actx.lineWidth = r * 1.5;
       actx.lineCap = "round";
       actx.beginPath();
       actx.moveTo(x, y);
-      actx.lineTo(x + tx * 6, y + ty * 6);
+      actx.lineTo(x + tx * len, y + ty * len);
+      actx.stroke();
+    }
+    if (lapped) {                                             // it has been the whole way round
+      actx.beginPath();
+      actx.arc(x, y, r + 9, 0, 7);
+      actx.strokeStyle = "#ffffff55";
+      actx.lineWidth = 2;
       actx.stroke();
     }
     actx.beginPath();
     actx.arc(x, y, r, 0, 7);
-    actx.fillStyle = o.c || "#f4f6fb";
-    actx.shadowColor = o.c || "#f4f6fb";
-    actx.shadowBlur = 14;
+    actx.fillStyle = col;
+    actx.shadowColor = col;
+    actx.shadowBlur = 14 + age * 24;
     actx.fill();
     actx.shadowBlur = 0;
   }
 
   // ---- your ship ----------------------------------------------------------------------
+  // Losing a life used to be a pip quietly going out. On a phone held at arm's length by someone
+  // watching other people, that is invisible — you find out you are dead, never that you were hit.
+  if (cur.you && cur.you.hp !== lastHp) {
+    if (lastHp != null && cur.you.hp < lastHp) hitAt = Date.now();
+    lastHp = cur.you.hp;
+  }
+  const sinceHit = Date.now() - hitAt;
+  if (sinceHit < 260) {
+    const k2 = 1 - sinceHit / 260;
+    actx.fillStyle = `rgba(255,90,78,${(0.42 * k2).toFixed(3)})`;
+    actx.fillRect(0, 0, W, H);
+    actx.strokeStyle = `rgba(255,255,255,${(0.9 * k2).toFixed(3)})`;
+    actx.lineWidth = 10 * k2;
+    actx.strokeRect(0, 0, W, H);
+  }
   if (cur.you) {
     const x = cur.you.x * W, y = cur.you.y * H, r = 0.052 * W;
+    // A tap that produces no immediate reaction reads as a dropped input, and the shot itself
+    // does not appear until the next broadcast up to 50ms later. The flare is local and instant;
+    // it says "your tap landed", not "a bullet exists", so it never lies about state.
+    const sinceFire = Date.now() - firedAt;
+    if (sinceFire < 140) {
+      const k3 = 1 - sinceFire / 140;
+      actx.beginPath();
+      actx.arc(x, y, r + 16 * k3, 0, 7);
+      actx.fillStyle = `rgba(255,200,87,${(0.4 * k3).toFixed(3)})`;
+      actx.fill();
+    }
     actx.beginPath();
     actx.arc(x, y, r, 0, 7);
     actx.fillStyle = "#ff7a3c";

@@ -972,7 +972,15 @@ export const MODES = {
       for (const b of d.bullets) {
         if (b.arriveAt) continue;                    // between two phones: on nobody's screen
         if (b.lane !== lane) continue;               // on someone else's phone
-        objects.push({ id: b.id, x: b.x, y: b.y, r: 0.02, c: b.owner === p.id ? "#8ef0b0" : "#ff6b5a", kind: "bullet" });
+        // hops is how many gaps this shot has already crossed. It is what makes the closed ring
+        // legible: a bullet that has been through other people's phones and come back looks
+        // nothing like one fired a moment ago from next door. Without it the mode's best moment —
+        // your own shot arriving from the other side — is indistinguishable from any other shot.
+        objects.push({
+          id: b.id, x: b.x, y: b.y, r: 0.02, kind: "bullet", hops: b.hops || 0,
+          mine: b.owner === p.id,
+          c: b.owner === p.id ? "#8ef0b0" : "#ff6b5a",
+        });
       }
       const n = d.order.length;
       const at = (i) => ctx.players().find((q) => q.id === d.order[((i % n) + n) % n]);
@@ -981,6 +989,7 @@ export const MODES = {
       return {
         kind: "arena",
         wantsTilt: true,                            // the phone only powers the sensor when asked
+        seats: n,                                   // how many phones make up the ring
         you: { x: s.x, y: s.y, hp: s.hp },
         objects,
         edge: "both",                               // no ends on a ring
