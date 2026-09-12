@@ -21,18 +21,17 @@ Ask the rep, in these words:
 ## Demo requirements
 
 - Keep 2–3 spare phones already joined and face-down on the table
-- Never demo with fewer than four phones
-- Use the room screen to show the truth the players cannot see
+- Never demo Chairs with fewer than three phones (four is better)
+- Use the room screen to show aim lines and TAKEN seats the players cannot see inbound
 - Have a backup paper QR code in case the laptop or Wi-Fi drops
-- Start with Flash for the clock-sync moment, then Blindside for the hidden-information laugh, then the seat placement reveal
+- Start with seat placement, then Chairs — Flash is optional as a 10s clock-sync warm-up
 
 ## Backup video
 
 Record a 60-second phone video at 2:00 PM with:
 
 - four phones on a table
-- one round of Blindside
-- one round of Flash
+- one climb of Chairs (at least one TAKEN verdict audible)
 - the room screen visible for the whole shot
 
 This is the fallback if the network fails during judging or if the room screen needs to carry the demo.
@@ -43,4 +42,12 @@ Submit at 3:30 PM, not 3:59. Keep the repo public after the event and note that 
 
 ## Track justification
 
-Multiplayer is the right track because Huddle requires physical co-presence. It does not work as a single-person project; it only works when people share the same room, look at each other, and react in real time.
+Multiplayer is the right track because Huddle / Chairs requires physical co-presence. It does not work as a single-person project; it only works when people share the same room, look at each other, shout strangers' names, and react in real time.
+
+## Expo table (People's Favourite)
+
+- Table never idle 4:00–6:30. Auto-lobby already reopens after 8s.
+- Loaners face-down, joined + seated, named JUDGE 1/2/3.
+- Paper QR taped to the table.
+- Room laptop on `/room?key=…` with the strap visible.
+- Pitch is Chairs only — Flash is optional warm-up, never the story.

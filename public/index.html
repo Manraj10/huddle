@@ -820,7 +820,7 @@ function drawModes() {
   const wasOpen = modesEl.querySelector("details")?.open;
   modeSig = sig;
 
-  // The hero is whatever the room is currently on, which the server boots to standoff.
+  // The hero is whatever the room is currently on, which the server boots to chairs.
   const hero = S.modes.find((m) => m.key === S.mode) || S.modes[0];
   const rest = S.modes.filter((m) => m !== hero);
   const ready = (m) => m.min <= enough;
@@ -1187,6 +1187,9 @@ function paint() {
     bg = "var(--marked)"; ink = "var(--marked-ink)";
     shape = "triangle"; label = "in the crosshairs"; pulsing = true;
   }
+  // Chairs verdicts: YOURS is cold green, TAKEN is the hot alarm that names the strangers who stole them.
+  if (v.clear) { bg = "var(--brace)"; ink = "var(--brace-ink)"; shape = "circle"; label = "yours"; }
+  if (v.taken) { bg = "var(--marked)"; ink = "var(--marked-ink)"; shape = "triangle"; label = "taken"; pulsing = true; }
   // It is in the air, at you, and you have the length of the flight to face whoever threw it.
   if (v.incomingAt) {
     bg = "var(--inbound)"; ink = "var(--inbound-ink)";

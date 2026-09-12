@@ -9,7 +9,7 @@ import { readFile } from "node:fs/promises";
 import { extname, join, normalize, sep } from "node:path";
 import { WebSocketServer } from "ws";
 
-import { AIM_INVERT, MODES, nearest, seatBlocker, seatWaiting } from "./modes.js";
+import { AIM_INVERT, LOBBY_MODES, MODES, nearest, seatBlocker, seatWaiting } from "./modes.js";
 import * as stats from "./deploy/stats.js";
 import * as say from "./deploy/say.js";
 import * as announcer from "./deploy/announcer.js";
@@ -53,7 +53,7 @@ const http = createServer(async (req, res) => {
 const room = {
   players: new Map(),        // id -> {id, name, ws, alive, score, seat, placed}
   phase: "lobby",            // lobby | live | gap | over
-  modeKey: "standoff",       // what a stranger who walks up and scans the QR gets handed
+  modeKey: "chairs",         // what a stranger who walks up and scans the QR gets handed
   data: {},                  // whatever the current mode needs
   winner: null,
   headline: null,            // a mode's own last word, for co-op rounds nobody "wins"
@@ -230,7 +230,7 @@ function push() {
   const base = {
     t: "view", now: now(), phase: room.phase, mode: room.modeKey, modeName: m.name,
     notice: room.notice, winner: room.winner, records: publicRecords(),
-    modes: Object.entries(MODES).map(([k, v]) => ({ key: k, name: v.name, min: v.min, blurb: v.blurb })),
+    modes: LOBBY_MODES.filter((k) => MODES[k]).map((k) => ({ key: k, name: MODES[k].name, min: MODES[k].min, blurb: MODES[k].blurb })),
     aimInvert: AIM_INVERT,     // set HUDDLE_AIM_INVERT=1 and restart if aiming sweeps the wrong way
     players: players().map((p) => ({ id: p.id, name: p.name, alive: p.alive, score: p.score, seat: p.seat, placed: !!p.placed })),
   };
