@@ -86,7 +86,23 @@
 </footer>
 <div id="boom"><div><div class="big" id="boom-big"></div><div class="sub" id="boom-sub">out</div></div></div>
 
-<script src="/qrcode.min.js"></script>
+<script src="/qrcode.min.js">
+// ---- announcer -------------------------------------------------------------------------------
+// The room screen is the only thing that talks. Server caches the audio by line, so the second
+// time a name is called it is instant and costs nothing. No API key means a 404 and silence.
+let speechOn = true, lastSpoken = "";
+function announce(line) {
+  if (!speechOn || !line || line === lastSpoken) return;
+  lastSpoken = line;
+  const a = new Audio(`/say?t=${encodeURIComponent(line)}`);
+  a.volume = 0.9;
+  a.addEventListener("error", () => { speechOn = false; });   // 404: stop asking for the rest of the night
+  a.play().catch(() => {});                                    // a browser that has not been clicked yet
+}
+// Browsers refuse audio until the page has been interacted with once. The operator clicks the
+// room screen to full-screen it anyway; that click is what unlocks the voice.
+addEventListener("pointerdown", () => { new Audio("/say?t=ready").play().catch(() => {}); }, { once: true });
+</script>
 <script type="module">
 const JOIN = new URLSearchParams(location.search).get("url") || location.origin;
 const canvas = document.getElementById("c");
@@ -173,8 +189,10 @@ function onView(m) {
     boomUntil = Date.now() + 2000;
     document.getElementById("boom-big").textContent = m.notice;
     document.getElementById("boom").classList.add("on");
+    if (!m.call) announce(m.notice);   // S.call is the written line; prefer it when it arrives
     setTimeout(() => { if (Date.now() >= boomUntil - 20) document.getElementById("boom").classList.remove("on"); }, 2000);
   }
+  if (m.call) announce(m.call);
   if (m.phase === "over" && lastPhase && lastPhase !== "over") {
     localTicker.rounds += 1;
     const times = String(m.view?.sub || "").match(/(\d+)ms/g);

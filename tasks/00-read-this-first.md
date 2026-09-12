@@ -56,7 +56,11 @@ lane knows.
    never state. A phone must not be able to lie about who has the bomb.
 3. **Hidden information is hidden in `view()`, not in the client.** If the client has to ignore a
    field to keep a secret, the secret is already leaked in devtools.
-4. **No framework, no build step, no bundler.** Plain HTML, CSS, ES modules. One dependency (`ws`).
+4. **Nothing ships to the phone but one HTML file.** No framework, no build step, no bundler on the
+   client — that is why it loads instantly on venue wifi, and it is the claim the pitch makes. The
+   server may take a dependency when it earns one: `ws` for sockets, and `mongodb` lazily imported
+   only when `MONGODB_URI` is set. Neither reaches a player's browser. Do not add anything to the
+   client bundle.
    This is a deliberate choice: it is why the phone loads instantly on venue WiFi.
 5. **No signal may be audio-only or colour-only.** A deaf player must see the tension; a colourblind
    player must read state from shape and text. iOS Safari has **no vibration**, so haptics can never

@@ -19,10 +19,14 @@ Priority awards:
 - People's Favourite: the room-level energy is obvious within seconds and the audience feels the reaction immediately
 - Best Design: the phone interface and room screen are designed to be legible from across a table, without reading tiny text
 - Vultr: the game server genuinely runs there. WebSockets need a real box, so this one is earned.
-- MongoDB Atlas: NOT EARNED YET. Stats persist to a JSON file on disk (`deploy/stats.js`). Either
-  point that writer at Atlas before submitting, or drop the claim. Do not submit it as-is.
-- ElevenLabs: NOT EARNED YET. There is no speech in the product — the only audio is one oscillator.
-  Either build the announcer on the room screen, or drop the claim.
+- MongoDB Atlas: WIRED, needs a key. `deploy/stats.js` writes every finished round to Atlas when
+  `MONGODB_URI` is set, using the official driver imported lazily — the Atlas Data API and the
+  custom HTTPS endpoints were removed on 30 September 2025, so any fetch-based tutorial writes into
+  a hole. The JSON file is still written and is what the room ticker reads, so no key means no cloud
+  and no breakage. Create a free cluster, set the env var, play one round, show the document.
+- ElevenLabs: WIRED, needs a key. The room screen speaks each round's result through `/say`, cached
+  on disk by line so a repeated name is instant and free. No `ELEVENLABS_API_KEY` means a 404 and
+  silence; the game never depends on it. Phones stay quiet — only the room screen talks.
 
 ## Why the product is not a startup gimmick
 

@@ -1,9 +1,40 @@
-// Lane 3 — round ledger for the room-screen ticker and the last beat of the pitch.
-// File-backed so the engine keeps its one npm dependency (`ws`). Optional STATS_WEBHOOK_URL
-// can point at MongoDB Atlas Data API (or anything that accepts JSON) for the MLH prize.
+// Round ledger for the room-screen ticker and the last beat of the pitch.
+//
+// Two sinks. The JSON file is always written and is what the ticker reads, so the room screen
+// works with no cloud account and no network. MongoDB Atlas is written too when MONGODB_URI is
+// set, and that is the copy that survives the laptop.
+//
+// It uses the official driver rather than an HTTP call because the Atlas Data API and the custom
+// HTTPS endpoints were removed on 30 September 2025 — any tutorial telling you to POST JSON at
+// Atlas is writing into a hole. Server-side only: nothing here reaches a phone.
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+
+// Loaded lazily so a machine with no MONGODB_URI never pays for the driver.
+let collection = null, mongoTried = false, mongoErr = null;
+async function mongo() {
+  if (mongoTried) return collection;
+  mongoTried = true;
+  const uri = process.env.MONGODB_URI;
+  if (!uri) return null;
+  try {
+    const { MongoClient } = await import("mongodb");
+    const client = new MongoClient(uri, { serverSelectionTimeoutMS: 4000 });
+    await client.connect();
+    collection = client.db(process.env.MONGODB_DB || "huddle").collection(process.env.MONGODB_COLLECTION || "rounds");
+    console.log("stats: writing rounds to MongoDB Atlas");
+  } catch (err) {
+    mongoErr = err.message;
+    console.error("stats: Atlas unavailable, file only —", err.message);
+  }
+  return collection;
+}
+
+/** For the pitch: is the Atlas copy actually live right now, or are we file-only? */
+export function sinks() {
+  return { file: true, atlas: !!collection, atlasError: mongoErr };
+}
 
 const DIR = join(import.meta.dirname, "..", "data");
 const FILE = join(DIR, "stats.json");
@@ -67,6 +98,13 @@ export function recordRound({ mode, playerCount, durationMs, winner, names = [],
 async function persist(entry) {
   await mkdir(DIR, { recursive: true });
   await writeFile(FILE, JSON.stringify(state, null, 2));
+
+  const col = await mongo();
+  if (col) {
+    // Never let a slow cloud write stall a round. The file already has it.
+    col.insertOne({ ...entry, at: new Date(entry.at) }).catch((err) => console.error("atlas insert failed", err.message));
+  }
+
   const hook = process.env.STATS_WEBHOOK_URL;
   if (!hook) return;
   const headers = { "content-type": "application/json" };

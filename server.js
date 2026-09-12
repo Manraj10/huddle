@@ -11,6 +11,7 @@ import { WebSocketServer } from "ws";
 
 import { MODES, nearest, seatBlocker, seatWaiting } from "./modes.js";
 import * as stats from "./deploy/stats.js";
+import * as say from "./deploy/say.js";
 import * as announcer from "./deploy/announcer.js";
 
 const PORT = Number(process.env.PORT || 8080);
@@ -21,7 +22,15 @@ const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/cs
 const HEARTBEAT = 6000;
 
 const http = createServer(async (req, res) => {
-  const path = new URL(req.url, "http://x").pathname;
+  const url = new URL(req.url, "http://x");
+  const path = url.pathname;
+  if (path === "/say") {
+    const audio = await say.speak(url.searchParams.get("t"));
+    if (!audio) { res.writeHead(404).end("speech is off"); return; }
+    res.writeHead(200, { "content-type": "audio/mpeg", "cache-control": "public, max-age=86400" });
+    res.end(audio);
+    return;
+  }
   if (path === "/stats") {
     res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
     return res.end(JSON.stringify(stats.ticker()));
