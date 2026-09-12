@@ -9,10 +9,12 @@ import { readFile } from "node:fs/promises";
 import { extname, join, normalize, sep } from "node:path";
 import { WebSocketServer } from "ws";
 
-import { MODES, nearest, seatBlocker } from "./modes.js";
+import { MODES, nearest, seatBlocker, seatWaiting } from "./modes.js";
 import * as stats from "./deploy/stats.js";
 
 const PORT = Number(process.env.PORT || 8080);
+// Anyone holding this can see what the players cannot. Set HUDDLE_ROOM_KEY to pin it across restarts.
+const ROOM_KEY = process.env.HUDDLE_ROOM_KEY || Math.random().toString(36).slice(2, 8);
 const PUBLIC = join(import.meta.dirname, "public");
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml" };
 const HEARTBEAT = 6000;
@@ -124,7 +126,7 @@ function finish(winner, headline) {
 function startRound() {
   const m = mode();
   // Derived fresh, never stored: see seatBlocker in modes.js.
-  if (seatBlocker(present())) { room.phase = "lobby"; return push(); }
+  if (seatBlocker(present(), mode().min)) { room.phase = "lobby"; return push(); }
   if (alive().length < m.min) { room.phase = "lobby"; room.notice = `need ${m.min}+ players`; return push(); }
   room.phase = "live";
   room.data = {};
@@ -182,7 +184,7 @@ function lobbyView(p) {
     kind: "text", title: m.name,
     sub: players().length < m.min ? `need ${m.min}+ phones` : names || "waiting",
     lobby: true, seatPicker: true,
-    seatNotice: seatBlocker(present()),
+    seatNotice: seatBlocker(present(), mode().min) || seatWaiting(present()),
     seats: present().map((q) => ({ id: q.id, name: q.name, angle: q.seat, placed: !!q.placed, you: !!p && q.id === p.id })),
   };
 }
@@ -192,7 +194,7 @@ const viewFor = (p) => (room.phase === "live" ? mode().view(ctx, p) : lobbyView(
 setInterval(() => {
   if (room.phase !== "live") return;
   if (mode().tick(ctx, now())) { lastChange = now(); push(); }
-  else if (now() - lastChange > 45000) {   // a wedged round is worse than a restarted one
+  else if (now() - lastChange > (mode().wedgeMs || 45000)) {   // a wedged round is worse than a restarted one
     room.notice = "round reset";
     lastChange = now();
     startRound();
@@ -216,6 +218,9 @@ wss.on("connection", (ws, req) => {
   ws.awake = true;
   ws.on("pong", () => { ws.awake = true; });
   if (new URL(req.url, "http://x").searchParams.has("spectate")) {
+    if (new URL(req.url, "http://x").searchParams.get("spectate") !== ROOM_KEY) {
+      return ws.close(4003, "room key required");
+    }
     spectators.add(ws);
     ws.on("message", (buf) => {
       let msg; try { msg = JSON.parse(buf); } catch { return; }
@@ -281,4 +286,5 @@ wss.on("connection", (ws, req) => {
 });
 
 await stats.load();
-http.listen(PORT, () => console.log(`party engine on http://localhost:${PORT} — modes: ${Object.keys(MODES).join(", ")}`));
+http.listen(PORT, () => console.log(`room screen: http://localhost:${PORT}/room?key=${ROOM_KEY}
+party engine on http://localhost:${PORT} — modes: ${Object.keys(MODES).join(", ")}`));

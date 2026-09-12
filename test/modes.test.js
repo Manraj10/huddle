@@ -6,7 +6,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { MODES, TUNING, apart, nearest, seatBlocker } from "../modes.js";
+import { MODES, TUNING, apart, nearest, seatBlocker, seatWaiting } from "../modes.js";
 
 // ---- a room in a test tube --------------------------------------------------
 
@@ -87,14 +87,18 @@ test("the seat blocker names who the room is waiting on, and says nothing when i
     { name: "ALFA", seat: 0, placed: false },
     { name: "BRAVO", seat: 0, placed: false },
   ];
-  assert.equal(seatBlocker(none), "everyone: drag your seat to where you are actually sitting");
+  assert.match(seatBlocker(none), /drag a seat/, "nobody placed: there is nothing to start");
+  assert.match(seatWaiting(none), /drag your seat/);
 
+  // An idle phone must NOT be able to hold the room hostage. Someone scans the QR at an expo,
+  // never sits down, and wanders off: the round starts without them and says so.
   const some = [
     { name: "ALFA", seat: 0, placed: true },
     { name: "BRAVO", seat: 2, placed: true },
     { name: "CHARLIE", seat: 0, placed: false },
   ];
-  assert.equal(seatBlocker(some), "waiting on CHARLIE to place a seat");
+  assert.equal(seatBlocker(some), null, "two placed players are enough to start");
+  assert.match(seatWaiting(some), /CHARLIE/, "but the room is told who is sitting it out");
 
   const stacked = [
     { name: "ALFA", seat: 1.0, placed: true },
@@ -110,15 +114,28 @@ test("the seat blocker names who the room is waiting on, and says nothing when i
   assert.equal(seatBlocker(fine), null);
 });
 
-test("the blocker is derived, so placing the last seat clears it with no bookkeeping", () => {
+test("the notices are derived, so placing the last seat clears them with no bookkeeping", () => {
   const list = [
     { name: "ALFA", seat: 0, placed: true },
     { name: "BRAVO", seat: 2, placed: true },
     { name: "CHARLIE", seat: 4, placed: false },
   ];
-  assert.match(seatBlocker(list), /CHARLIE/);
+  assert.match(seatWaiting(list), /CHARLIE/, "the room is told who is sitting out");
+  assert.equal(seatBlocker(list), null, "but the round can still start");
   list[2].placed = true;
+  assert.equal(seatWaiting(list), null);
   assert.equal(seatBlocker(list), null);
+});
+
+test("a round with too few seats placed is blocked, and says how many more are needed", () => {
+  const list = [
+    { name: "ALFA", seat: 0, placed: true },
+    { name: "BRAVO", seat: 2, placed: false },
+    { name: "CHARLIE", seat: 4, placed: false },
+  ];
+  assert.match(seatBlocker(list, 2), /1 more phone/);
+  list[1].placed = true;
+  assert.equal(seatBlocker(list, 2), null);
 });
 
 // ---- relay ------------------------------------------------------------------

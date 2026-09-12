@@ -5,7 +5,7 @@ playing nothing to look at; this folder is why they stay.
 
 | Path | What |
 |---|---|
-| `public/room.html` | Director view. Open `/room` on the laptop. |
+| `public/room?key=<ROOM_KEY>.html` | Director view. Open `/room?key=<ROOM_KEY>` on the laptop. |
 | `deploy/setup.sh` | One-shot install on a fresh Ubuntu VPS. |
 | `deploy/huddle.service` | systemd unit: `node server.js`, restart on crash. |
 | `deploy/Caddyfile` | TLS / reverse proxy in front of `:8080`. |
@@ -16,14 +16,14 @@ playing nothing to look at; this folder is why they stay.
 ## Room screen
 
 ```
-http://localhost:8080/room
+http://localhost:8080/room?key=<ROOM_KEY>
 ```
 
 Connects with `?spectate`. The engine already sends a full-truth view every broadcast. Override
 the QR / join URL when the public hostname is not the one in the address bar:
 
 ```
-http://localhost:8080/room?url=https://your-public-host
+http://localhost:8080/room?key=<ROOM_KEY>?url=https://your-public-host
 ```
 
 Done when someone standing behind the table can follow a whole round without touching a phone.
@@ -77,6 +77,11 @@ draws players at `seat` angles, so the discovered ring just appears.
 
 ## File ownership
 
-Lane 3 owns `public/room.html` and `deploy/`. `modes.js` and `public/index.html` are not ours.
-`server.js` only gained spectator ping/pong, `/room`, `/stats`, and a finish-hook for the ticker —
+Lane 3 owns `public/room?key=<ROOM_KEY>.html` and `deploy/`. `modes.js` and `public/index.html` are not ours.
+`server.js` only gained spectator ping/pong, `/room?key=<ROOM_KEY>`, `/stats`, and a finish-hook for the ticker —
 without those the director view cannot sync clocks or survive a reload.
+
+
+> The room screen needs the room key. The server prints it at startup; pin it across
+> restarts with `HUDDLE_ROOM_KEY=...`. Without it the full-truth feed is refused, which is what
+> stops a player opening the director view on their own phone and seeing who holds the bomb.

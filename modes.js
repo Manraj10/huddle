@@ -71,22 +71,35 @@ export function nearest(list, from, angle) {
 }
 
 /** Two people sitting on top of each other make every swipe ambiguous. */
-export const SAME_SEAT = 0.25;
+export const SAME_SEAT = 0.12;
 
 /**
  * Why a round cannot start yet, or null if it can. Pure, and recomputed on every broadcast —
  * a stored reason goes stale the instant the last person places their seat, and a lobby telling
  * four placed players to go and place themselves is how a demo dies.
  */
-export function seatBlocker(present) {
-  if (present.length < 2) return null;
+/** Who has not sat down yet. Advisory only — this never stops a round. */
+export function seatWaiting(present) {
   const unplaced = present.filter((p) => !p.placed);
-  if (unplaced.length === present.length) return "everyone: drag your seat to where you are actually sitting";
-  if (unplaced.length) return `waiting on ${unplaced.map((p) => p.name).join(", ")} to place a seat`;
-  for (let i = 0; i < present.length; i++) {
-    for (let j = i + 1; j < present.length; j++) {
-      if (apart(present[i].seat, present[j].seat) < SAME_SEAT) {
-        return `${present[i].name}, ${present[j].name} are in the same place — one of you move`;
+  if (!unplaced.length) return null;
+  if (unplaced.length === present.length) return "drag your seat to where you are actually sitting";
+  return `${unplaced.map((p) => p.name).join(", ")} ${unplaced.length === 1 ? "has" : "have"} not sat down — starting without them`;
+}
+
+export function seatBlocker(present, min = 2) {
+  const placed = present.filter((p) => p.placed);
+  if (placed.length < min) {
+    const missing = min - placed.length;
+    return present.length < min
+      ? null                                        // not enough phones yet; that is not a seat problem
+      : `${missing} more ${missing === 1 ? "phone needs" : "phones need"} to drag a seat onto the ring`;
+  }
+  // Only PLACED players can block, and only by sitting on top of each other. A phone that joined
+  // and wandered off sits the round out instead of holding the whole room hostage.
+  for (let i = 0; i < placed.length; i++) {
+    for (let j = i + 1; j < placed.length; j++) {
+      if (apart(placed[i].seat, placed[j].seat) < SAME_SEAT) {
+        return `${placed[i].name}, ${placed[j].name} are in the same place — one of you move`;
       }
     }
   }
@@ -251,7 +264,7 @@ export const MODES = {
 
   // ------------------------------------------------------------------- hidden roles
   impostor: {
-    name: "Impostor", min: 3,
+    name: "Impostor", min: 3, wedgeMs: 90000,
     blurb: "Everyone sees the same word. One of you sees a different one. Say it out loud, then vote.",
     start(ctx) {
       const pairs = [
@@ -574,7 +587,7 @@ export const MODES = {
   // round resolves on a lie the engine told. The pair are never informed that they are the pair —
   // their view is the same object as everyone else's with a different word in it.
   wiretap: {
-    name: "Wiretap", min: 4,
+    name: "Wiretap", min: 4, wedgeMs: 130000,
     blurb: "Everyone gets a word. Two of you share one. Find your twin before the room finds you.",
     start(ctx) {
       const d = ctx.data;

@@ -72,6 +72,7 @@
     <span><b id="n-fast">—</b> fastest</span>
   </div>
   <div class="caption" id="cap"></div>
+  <div class="caption" id="seatnotice" hidden style="color:#ffc857;font-weight:800"></div>
 </footer>
 <div id="boom"><div><div class="big" id="boom-big"></div><div class="sub" id="boom-sub">out</div></div></div>
 
@@ -96,7 +97,7 @@ function onPong(m) {
 }
 
 function connect() {
-  ws = new WebSocket(`${proto}://${location.host}?spectate`);
+  ws = new WebSocket(`${proto}://${location.host}?spectate=${new URLSearchParams(location.search).get('key') || ''}`);
   ws.onopen = () => {
     dropped = false; lastPong = Date.now();
     for (let i = 0; i < 5; i++) setTimeout(ping, i * 110);
@@ -184,6 +185,9 @@ function paintChrome() {
   document.getElementById("n-fast").textContent = t.bestReactionMs != null ? `${t.bestReactionMs}ms` : "—";
   const holder = S.view?.map?.holder;
   const list = document.getElementById("plist");
+  const noticeEl = document.getElementById("seatnotice");
+  const notice = S.view?.seatNotice;
+  if (noticeEl) { noticeEl.textContent = notice || ""; noticeEl.hidden = !notice; }
   list.innerHTML = (S.players || []).map((p) =>
     `<span class="${p.alive ? (p.id === holder ? "hold" : "") : "out"}"><b>${esc(p.name)}</b><i>${p.alive ? (p.id === holder ? "has it" : (p.score || "")) : "out"}</i></span>`
   ).join("");
@@ -272,6 +276,23 @@ function draw() {
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(v.litBig || "GO", cx, cy);
+    }
+  }
+
+  // Modes with no countdown and no flash (Relay, Chain, Wiretap, Duel) still have something to
+  // say in the middle of the table. Without this the room screen went blank for four of seven games.
+  if (S?.phase === "live" && !v.countdownTo && !v.flashAt) {
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    if (v.big != null) {
+      ctx.fillStyle = "#f2f5fa";
+      ctx.font = "800 44px ui-sans-serif, system-ui";
+      ctx.fillText(String(v.big), cx, cy - 8);
+    }
+    if (v.title) {
+      ctx.fillStyle = "#8d97ab";
+      ctx.font = "700 13px ui-sans-serif, system-ui";
+      ctx.fillText(String(v.title).toUpperCase(), cx, cy + (v.big != null ? 26 : 0));
     }
   }
 
