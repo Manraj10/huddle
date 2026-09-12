@@ -52,7 +52,7 @@ body {
   -webkit-text-size-adjust: 100%;
 }
 /* touch-action does not inherit. It has to sit on whatever receives the gesture. */
-#app, .screen, .ring, .scores, .notice, .seatpad { touch-action: none; }
+#app, .screen, .ring, .scores, .notice, .seatpad, #arena { touch-action: none; }
 
 #app {
   position: fixed; inset: 0;
@@ -365,6 +365,19 @@ addEventListener("pointerup", (e) => {
   const start = down; down = null;
   if (!start || !joined || !S || S.phase !== "live") return;
   const dx = e.clientX - start.x, dy = e.clientY - start.y;
+  // In an arena the two gestures mean different things from everywhere else: you are aiming
+  // inside your own screen, not at a person across the table. A tap fires toward where you
+  // tapped, measured from your own ship, so "shoot over there" is one gesture and the ship
+  // never teleports to your finger.
+  if (S.view?.kind === "arena") {
+    if (Math.hypot(dx, dy) > 38) return;             // that was a drag; the move handler had it
+    const you = S.view.you;
+    if (!you) return;
+    const dir = Math.atan2(e.clientY / innerHeight - you.y, e.clientX / innerWidth - you.x);
+    ws?.send(JSON.stringify({ t: "act", a: "fire", dir }));
+    buzz(12);
+    return;
+  }
   if (Math.hypot(dx, dy) > 38) {
     const angle = Math.atan2(dy, dx);
     ws?.send(JSON.stringify({ t: "act", a: "swipe", angle }));
@@ -520,7 +533,8 @@ function drawRing(list) {
 // ---- arena renderer (Duel) ---------------------------------------------------------
 // Lane 1: this is the shape I built to. Coordinates normalised 0-1 inside your own screen,
 // objects interpolated between broadcasts so a slow network still looks like 60fps.
-// Drag sends {t:'act', a:'move', x, y}; a tap sends {t:'act', a:'fire', angle}.
+// Drag sends {t:'act', a:'move', x, y}; a tap sends {t:'act', a:'fire', dir} where dir is the
+// angle from your ship to where you tapped.
 const arena = $("arena"), actx = arena.getContext("2d");
 let frames = [null, null];
 function feedArena(v) {
@@ -534,7 +548,10 @@ function drawArena() {
   if (arena.width !== W * dpr) { arena.width = W * dpr; arena.height = H * dpr; }
   actx.setTransform(dpr, 0, 0, dpr, 0, 0);
   actx.clearRect(0, 0, W, H);
-  const k = clamp01((Date.now() - (frames[1].at || 0)) / 100);
+  // Against the SYNCED clock, not the local one: frames are stamped with the server's time,
+  // and a phone whose clock is a minute off otherwise pins k at 1 and loses every interpolated
+  // frame, which reads as a stutter rather than as a clock bug.
+  const k = clamp01((serverNow() - (frames[1].at || 0)) / 100);
   const lerp = (a, b) => a + (b - a) * k;
   if (cur.edge != null) {                            // the side the shot crosses to the next phone
     const side = String(cur.edge);
