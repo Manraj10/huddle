@@ -138,3 +138,40 @@ export function attachTilt({ onStick, hz = 30, range = 28, dead = 3, tau = 70 } 
 }
 
 const round3 = (n) => Math.round(n * 1000) / 1000;
+
+// ---- aiming at a human ------------------------------------------------------
+// The seat ring and a swipe are both measured in the phone's own screen frame, and that is only
+// the same frame the room is in for as long as the phone keeps the yaw it was seated at. Turn the
+// phone ninety degrees on the table and every throw silently goes to the wrong person — the claim
+// this whole project rests on, quietly false, with nothing on screen to say so.
+//
+// The fix is to measure the swipe against the world instead. We do NOT need a compass for this,
+// which is the whole trick: absolute heading means webkitCompassHeading on iOS and plain alpha on
+// Android, it drifts, it needs a figure-of-eight calibration, and a laptop or a metal table leg
+// bends it. We only need how far the phone has TURNED since you placed your seat, and a relative
+// yaw is the one thing alpha reports the same way on both platforms.
+//
+// Derivation, because the sign is the whole game and it is easy to get backwards:
+//   Phone flat, top pointing north. Someone due east is at screen angle 0 (screen +x is east,
+//   and screen y runs DOWN, which is why the ring uses atan2(dy, dx) at all).
+//   Now turn the phone a quarter turn anticlockwise seen from above — alpha increases by 90 by
+//   spec. The top now points west, so screen +x points north and screen +y points east. That
+//   same person due east now reads at atan2(1, 0) = +pi/2.
+//   So a fixed direction in the room gains screen angle as alpha gains: screen = world + dAlpha,
+//   and therefore world = screen - dAlpha.
+
+/** Yaw of the VIEWPORT, not the device. A phone the browser re-orients has not turned relative to
+ *  the room at all: alpha moves one way, screen.orientation.angle moves the other, and the two
+ *  cancel here so a player who rotates into landscape mid-round does not lose their aim. */
+export const viewportYaw = (alpha, screenAngle = 0) => wrapDeg((alpha || 0) + (screenAngle || 0));
+
+/**
+ * A swipe in screen space, re-expressed in the frame the player was sitting in when they placed
+ * their seat. `yawNow`/`yawRef` are viewportYaw values in degrees. Returns radians, wrapped, so
+ * it drops straight into ctx.towards().
+ */
+export function aimAngle(screenAngle, yawNow, yawRef) {
+  const turned = wrapDeg(yawNow - yawRef) * Math.PI / 180;
+  const a = screenAngle - turned;
+  return Math.atan2(Math.sin(a), Math.cos(a));
+}

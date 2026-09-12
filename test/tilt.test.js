@@ -8,9 +8,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { smooth, stick, worthSending, wrapDeg } from "../public/tilt.js";
+import { aimAngle, smooth, stick, viewportYaw, worthSending, wrapDeg } from "../public/tilt.js";
 
 const near = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) < eps, `${a} !~ ${b}`);
+const deg2rad = (d) => d * Math.PI / 180;
 
 test("angles wrap to (-180, 180]", () => {
   near(wrapDeg(0), 0);
@@ -98,4 +99,53 @@ test("a phone at rest stops putting packets on the wire", () => {
   assert.equal(worthSending(at, { x: 0.405, y: -0.2 }), false);
   assert.equal(worthSending(at, { x: 0.44, y: -0.2 }), true);
   assert.equal(worthSending(null, at), true, "the first reading always goes");
+});
+
+// ---- aiming at a human, not at a direction on a screen -----------------------
+
+test("a swipe means the same person after the phone has been turned", () => {
+  // Seated with the phone's top pointing north, a teammate due east reads at screen angle 0.
+  const ref = viewportYaw(0, 0);
+  near(aimAngle(0, ref, ref), 0);
+
+  // Quarter turn anticlockwise: alpha gains 90 by spec, and that same teammate now falls under a
+  // swipe toward the BOTTOM of the screen. Both have to resolve to the same person.
+  const turned = viewportYaw(90, 0);
+  near(aimAngle(Math.PI / 2, turned, ref), 0);
+
+  // And the reverse turn, the other way round.
+  near(aimAngle(-Math.PI / 2, viewportYaw(-90, 0), ref), 0);
+});
+
+test("turning the phone right round comes back to the same person", () => {
+  const ref = viewportYaw(10, 0);
+  for (const alpha of [10, 100, 190, 280, 370]) {
+    const world = aimAngle(deg2rad(alpha - 10), viewportYaw(alpha, 0), ref);
+    near(world, 0, 1e-9);
+  }
+});
+
+test("aim survives the wrap at 360 the way a phone actually crosses it", () => {
+  // A player seated at alpha 350 who turns twenty degrees is at alpha 10, not at alpha 370.
+  // Subtracting raw gives -340 and sends the bomb most of the way round the table.
+  const ref = viewportYaw(350, 0);
+  const now = viewportYaw(10, 0);
+  near(aimAngle(deg2rad(20), now, ref), 0, 1e-9);
+});
+
+test("the browser re-orienting the viewport is not the player turning", () => {
+  // Someone rotates the phone into landscape. The device yaw changes and the browser rotates the
+  // content back, so nothing has moved relative to the room and the aim must not shift.
+  // alpha falls by 90 for a clockwise turn; screen.orientation.angle rises by 90 to compensate.
+  const seated = viewportYaw(200, 0);
+  const landscape = viewportYaw(110, 90);
+  assert.equal(seated, landscape, "the two cancel, which is the point");
+  near(aimAngle(0.7, landscape, seated), 0.7);
+});
+
+test("aim always comes back wrapped, so it can go straight into seat geometry", () => {
+  for (const [screen, alpha] of [[3.0, 200], [-3.0, 20], [0.2, 359], [Math.PI, 45]]) {
+    const a = aimAngle(screen, viewportYaw(alpha, 0), viewportYaw(0, 0));
+    assert.ok(a > -Math.PI - 1e-9 && a <= Math.PI + 1e-9, `${a} out of range`);
+  }
 });
