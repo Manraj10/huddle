@@ -8,10 +8,11 @@ import { WebSocket } from "ws";
 const PORT = Number(process.env.PORT || 43123);
 const BASE = `http://127.0.0.1:${PORT}`;
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
+const KEY = "smoke-key";
 
 const child = spawn("node", ["server.js"], {
   cwd: ROOT,
-  env: { ...process.env, PORT: String(PORT) },
+  env: { ...process.env, PORT: String(PORT), HUDDLE_ROOM_KEY: KEY },
   stdio: ["ignore", "pipe", "pipe"],
 });
 let out = "";
@@ -45,11 +46,15 @@ try {
   if (!room.ok) fail(`/room ${room.status}`);
   const html = await room.text();
   if (!html.includes("?spectate") || !html.includes("qrcode")) fail("room.html missing spectate/qr");
+  // The QR is the only way anyone joins. A CDN we cannot reach on venue wifi is a dead demo.
+  if (/cdnjs|unpkg|jsdelivr/.test(html)) fail("room.html still pulls a script from a CDN");
+  const qr = await fetch(`${BASE}/qrcode.min.js`);
+  if (!qr.ok) fail(`/qrcode.min.js ${qr.status} — the join QR will not render offline`);
 
   const stats0 = await (await fetch(`${BASE}/stats`)).json();
   if (typeof stats0.rounds !== "number") fail("stats shape");
 
-  const spec = await wsOpen(`ws://127.0.0.1:${PORT}/?spectate`);
+  const spec = await wsOpen(`ws://127.0.0.1:${PORT}/?spectate=${KEY}`);
   spec.send(JSON.stringify({ t: "ping", c: Date.now() }));
   const pong = await Promise.race([
     once(spec, (m) => m.t === "pong"),
@@ -63,6 +68,9 @@ try {
   b.send(JSON.stringify({ t: "join", name: "Ben", token: "b" }));
   await once(a, (m) => m.t === "hello");
   await once(b, (m) => m.t === "hello");
+  a.send(JSON.stringify({ t: "seat", angle: 0 }));
+  b.send(JSON.stringify({ t: "seat", angle: Math.PI }));
+  await sleep(80);
   const liveP = once(spec, (m) => m.t === "view" && m.phase === "live" && m.spectator);
   a.send(JSON.stringify({ t: "start", mode: "blindside" }));
   const live = await Promise.race([liveP, sleep(2000).then(() => null)]);
