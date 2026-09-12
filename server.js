@@ -123,6 +123,22 @@ function finish(winner, headline) {
   push();
 }
 
+/**
+ * Nobody in the room may share a name. The whole product is "aim at a person", and the phone
+ * previews that person BY NAME — three players called Sam, or the four walk-ups who all tapped
+ * Join without typing anything, make every throw a guess and the room screen unreadable.
+ */
+function uniqueName(raw) {
+  const base = String(raw || "").trim().slice(0, 12) || "PLAYER";
+  const taken = new Set(players().map((p) => p.name.toLowerCase()));
+  if (!taken.has(base.toLowerCase())) return base;
+  for (let n = 2; n < 100; n++) {
+    const tryName = `${base.slice(0, 10)} ${n}`;
+    if (!taken.has(tryName.toLowerCase())) return tryName;
+  }
+  return base;
+}
+
 function startRound() {
   const m = mode();
   // Derived fresh, never stored: see seatBlocker in modes.js.
@@ -239,7 +255,7 @@ wss.on("connection", (ws, req) => {
       if (back) { back.ws = ws; back.gone = false; me = back; }
       else {
         // Join order decides nothing about where you sit. You are nowhere until you say so.
-        me = { id: nextId++, token, name: String(msg.name || "player").slice(0, 12), ws,
+        me = { id: nextId++, token, name: uniqueName(msg.name), ws,
                alive: room.phase === "lobby", score: 0, seat: 0, placed: false, gone: false };
         room.players.set(me.id, me);
       }

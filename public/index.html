@@ -510,10 +510,17 @@ setInterval(() => {
 }, 3000);
 connect();
 
+// Short, loud, and legible across a table, because a name here is a TARGET: someone is about to
+// look at the ring, find you, and turn their phone at you. "player" — which is what every walk-up
+// who taps Join without typing used to become — is none of those things, and a room containing
+// four of them cannot be aimed at.
+const CALLSIGNS = ["FOX", "IVY", "OWL", "JET", "ASH", "ELM", "KOI", "YAK", "ORB", "ZIP",
+                   "MOTH", "LARK", "REEF", "DUNE", "FERN", "PIKE", "WREN", "ONYX", "HAWK", "CUSP"];
+
 $("j").onclick = () => {
   audioOn();                                        // iOS only grants audio inside a real gesture
   armTilt();                                        // and orientation, in the same one
-  name = store.name = ($("n").value || "player").slice(0, 12);
+  name = store.name = ($("n").value.trim() || CALLSIGNS[Math.floor(Math.random() * CALLSIGNS.length)]).slice(0, 12);
   ws?.send(JSON.stringify({ t: "join", name, token: TOKEN }));
 };
 $("n").value = name;

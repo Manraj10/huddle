@@ -33,8 +33,12 @@ function bad(what, detail) {
 function is(cond, what, detail) { cond ? ok(what) : bad(what, detail); }
 
 /** A phone. Keeps the latest view it was sent, exactly as the real client does. */
+let nextToken = 1;
 class Phone {
-  constructor(name) { this.name = name; this.latest = null; this.id = null; }
+  // The token is the identity a phone comes BACK as, so it belongs to the device and not to the
+  // name. Deriving it from the name made three players called Sam look like one Sam reconnecting
+  // twice, which is exactly the bug this harness exists to catch.
+  constructor(name) { this.name = name; this.token = "tok-" + nextToken++; this.latest = null; this.id = null; }
   async open() {
     this.ws = new WebSocket(`ws://127.0.0.1:${PORT}/`);
     await new Promise((res, rej) => { this.ws.on("open", res); this.ws.on("error", rej); });
@@ -46,7 +50,7 @@ class Phone {
     return this;
   }
   send(m) { this.ws.send(JSON.stringify(m)); }
-  join() { this.send({ t: "join", name: this.name, token: `tok-${this.name}` }); }
+  join() { this.send({ t: "join", name: this.name, token: this.token }); }
   seat(angle) { this.send({ t: "seat", angle }); }
   act(a) { this.send({ t: "act", ...a }); }
   /** A screen lock drops the socket without a clean close. This is that. */
@@ -102,6 +106,20 @@ try {
   phones[3].seat(ANGLES[3]);
   await sleep(150);
   is(notice(phones[0]) == null, "with everyone placed the notice clears", JSON.stringify(notice(phones[0])));
+
+  console.log("nobody shares a name");
+  // The mechanic is "aim at a person" and the phone previews that person by name, so two players
+  // called the same thing make every throw a guess.
+  const twins = [];
+  for (let i = 0; i < 3; i++) twins.push(await new Phone("Sam").open());
+  for (const t of twins) t.join();
+  await sleep(250);
+  const roster = (phones[0].latest?.players || []).map((p) => p.name);
+  const sams = roster.filter((n) => /^Sam/i.test(n));
+  is(sams.length === 3, "three players called Sam all get in", JSON.stringify(sams));
+  is(new Set(sams.map((n) => n.toLowerCase())).size === 3, "and none of them share a name", JSON.stringify(sams));
+  for (const t of twins) t.die();
+  await sleep(250);
 
   console.log("per-player truth");
   phones[0].send({ t: "start", mode: "relay" });
