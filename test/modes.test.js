@@ -484,10 +484,26 @@ test("duel: the arena view is normalised 0-1 and knows which edges have a neighb
 test("duel: movement and firing are different messages", () => {
   const r = room(["ALFA", "BRAVO"], { seats: [0, 3] }).play("duel");
   const me = r.players.find((p) => p.id === r.data.order[0]);
-  assert.equal(r.act(me.name, { a: "move", x: 0.2, y: 0.8 }), true);
+  r.act(me.name, { a: "move", x: 0.2, y: 0.8 });
   assert.deepEqual({ x: r.data.ship[me.id].x, y: r.data.ship[me.id].y }, { x: 0.2, y: 0.8 });
-  assert.equal(r.act(me.name, { a: "move", x: 9, y: -9 }), true);
+  r.act(me.name, { a: "move", x: 9, y: -9 });
   assert.deepEqual({ x: r.data.ship[me.id].x, y: r.data.ship[me.id].y }, { x: 1, y: 0 }, "clamped to the screen");
+});
+
+test("duel: a continuous input never owns the broadcast", () => {
+  // act() returning true is the server's cue to serialise the whole room once per player. A
+  // finger on a screen produces 60-120 pointermoves a second and a tilted phone produces 30, so
+  // a continuous input that answered true would turn four players into thousands of view() calls
+  // a second. It updates state and says nothing; the 50ms tick owns the frame.
+  const r = room(["ALFA", "BRAVO"], { seats: [0, 3] }).play("duel");
+  const me = r.players.find((p) => p.id === r.data.order[0]);
+  assert.equal(r.act(me.name, { a: "move", x: 0.3, y: 0.3 }), false, "a move must not force a broadcast");
+  assert.equal(r.data.ship[me.id].x, 0.3, "and must still have moved the ship");
+  // The tick is what puts an arena on screen, and it reports a frame every time.
+  r.advance(50);
+  assert.equal(r.tick(), true, "the tick owns the arena frame");
+  // Firing is discrete and rare, so it keeps the right to push immediately.
+  assert.equal(r.act(me.name, { a: "fire", dir: 0 }), true, "a shot is discrete and pushes at once");
 });
 
 test("duel: an unflown ship cannot win by standing still once its phone has gone", () => {

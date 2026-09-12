@@ -684,7 +684,12 @@ export const MODES = {
         if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
         s.x = Math.min(1, Math.max(0, x));
         s.y = Math.min(1, Math.max(0, y));
-        return true;
+        // Deliberately FALSE. Returning true makes the server broadcast the whole room once per
+        // pointermove, and a pointermove arrives 60-120 times a second per finger; six phones
+        // dragging is thousands of per-player view() calls a second for frames nobody asked for.
+        // A continuous input never owns the broadcast — the 50ms tick does, and this mode ticks
+        // true every tick anyway, so the position still leaves at 20Hz.
+        return false;
       }
       if (msg.a !== "fire") return false;
       const now = ctx.now();

@@ -330,9 +330,15 @@ const ping = () => ws?.readyState === 1 && ws.send(JSON.stringify({ t: "ping", c
 function onPong(m) {
   lastPong = Date.now();
   offsets.push(m.s - (m.c + (Date.now() - m.c) / 2));
-  offsets.sort((a, b) => a - b);
-  offset = offsets[offsets.length >> 1];
+  // Evict the OLDEST sample, which means evicting before the sort. Sorting in place and then
+  // shifting drops the smallest offset instead, so after twenty-four pongs the window holds the
+  // twenty-four largest values ever seen and the median climbs for as long as the page is open.
+  // Every phone then believes the server is further ahead than it is: Flash lights early, every
+  // countdown under-reads, and the one number this project claims — that every phone agrees on
+  // the same millisecond — quietly stops being true over the length of an expo.
   if (offsets.length > 24) offsets.shift();
+  const sorted = [...offsets].sort((a, b) => a - b);
+  offset = sorted[sorted.length >> 1];
 }
 
 function audioOn() {
@@ -629,11 +635,13 @@ arena.addEventListener("pointermove", (e) => {
 
 // ---- the one place a view turns into pixels -----------------------------------------
 let everAlive = false, wasHolding = false, wasAlive = true, litNow = false, phaseWas = null;
-let screen = "join";
+// NOT `screen`: that shadows window.screen for this whole module, and screen.orientation.angle
+// is exactly what the tilt code needs to read to stop beta and gamma trading places in landscape.
+let onScreen = "join";
 
 function show(next) {
-  if (screen === next) return;
-  screen = next;
+  if (onScreen === next) return;
+  onScreen = next;
   $("join").hidden = next !== "join";
   $("lobby").hidden = next !== "lobby";
   play.hidden = next !== "play";
@@ -677,7 +685,7 @@ function paint() {
     `<span class="${p.alive ? "" : "out"}${p.id === myId() ? " me" : ""}">${p.name}${p.score ? ` <i>${p.score}</i>` : ""}</span>`).join("");
   text($("notice"), S.phase === "live" ? "" : (S.notice || ""));
 
-  if (screen === "lobby") {
+  if (onScreen === "lobby") {
     const blocked = v.seatNotice || "";
     text($("seatnotice"), blocked);
     $("seatnotice").hidden = !blocked;

@@ -101,8 +101,10 @@ export function attachTilt({ onStick, hz = 30, range = 28, dead = 3, tau = 70 } 
   const handle = { live: false, reason: null };
 
   const screenAngle = () => {
-    const a = screen.orientation?.angle;
-    return typeof a === "number" ? a : (typeof orientation === "number" ? orientation : 0);
+    // globalThis, not a bare `screen`: a page that happens to declare its own `screen`
+    // shadows the global one and this silently reads a string's .orientation instead.
+    const a = globalThis.screen?.orientation?.angle;
+    return typeof a === "number" ? a : (typeof globalThis.orientation === "number" ? globalThis.orientation : 0);
   };
 
   function onEvent(e) {
