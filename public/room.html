@@ -22,6 +22,10 @@
   aside { border-left:1px solid var(--line); padding:18px 18px 12px; display:flex; flex-direction:column;
     align-items:center; gap:10px; min-height:0; overflow:auto; }
   #qr { padding:10px; background:#fff; border-radius:12px; }
+  #call {
+    flex-basis:100%; order:2; text-align:center; color:#f2f5fa;
+    font-size:19px; font-weight:800; letter-spacing:-.01em; padding:4px 0 2px;
+  }
   #unseen-wrap { color:#ffc857; }
   #unseen-wrap b { color:#ffc857; }
   #qr img, #qr canvas { display:block; }
@@ -75,6 +79,7 @@
     <span><b id="n-fast">—</b> fastest</span>
     <span id="unseen-wrap" hidden><b id="n-unseen">0</b> on nobody's screen</span>
   </div>
+  <div class="caption" id="call" hidden></div>
   <div class="caption" id="strap" hidden style="color:#ffc857;font-weight:800;letter-spacing:.08em"></div>
   <div class="caption" id="cap"></div>
   <div class="caption" id="seatnotice" hidden style="color:#ffc857;font-weight:800"></div>
@@ -203,6 +208,13 @@ function paintChrome() {
   // Counted by the server from the ids it actually put on the wire this broadcast, so a shot
   // crossing the real gap between two handsets is a number a judge can watch rise and fall
   // rather than a claim in a pitch. This screen is the only client allowed to know.
+  // Whatever a model returns is untrusted text and it goes on a screen, so it is set as
+  // textContent and never as markup. Player names are typed by strangers and they were in the
+  // prompt that produced it.
+  const callEl = document.getElementById("call");
+  callEl.textContent = S.call || "";
+  callEl.hidden = !S.call;
+
   const strapEl = document.getElementById("strap");
   const strap = S.view?.strap;
   strapEl.textContent = strap || "";

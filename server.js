@@ -11,6 +11,7 @@ import { WebSocketServer } from "ws";
 
 import { MODES, nearest, seatBlocker, seatWaiting } from "./modes.js";
 import * as stats from "./deploy/stats.js";
+import * as announcer from "./deploy/announcer.js";
 
 const PORT = Number(process.env.PORT || 8080);
 // Anyone holding this can see what the players cannot. Set HUDDLE_ROOM_KEY to pin it across restarts.
@@ -49,6 +50,7 @@ const room = {
   headline: null,            // a mode's own last word, for co-op rounds nobody "wins"
   notice: "",                // one line shown to everyone, e.g. "ALPHA is out"
   records: {},               // mode key -> the room's best. Keys starting with _ never ship.
+  call: null,                // the room screen's commentary line. Spectators only, never players.
 };
 let nextId = 1;
 let gapTimer = null;
@@ -136,7 +138,25 @@ function finish(winner, headline) {
   room.phase = "over";
   room.winner = winner ? winner.name : null;
   room.headline = headline || null;
-  push();
+  room.call = null;
+  push();                      // the room sees the result NOW, whatever the commentator does
+
+  // Fire and forget, and only ever to the room screen. If there is no key, if the venue wifi is
+  // gone, or if it is simply slow, nothing here waits and nothing here changes: the round result
+  // is already on every screen. A second push happens only if a line actually arrives.
+  announcer.call({
+    mode: room.modeKey,
+    names: players().map((p) => p.name),
+    winner: room.winner,
+    headline: headline ? [headline.big, headline.title, headline.sub].filter(Boolean).join(" — ") : null,
+    notice: room.notice,
+    durationMs: now() - (room.roundStartedAt || now()),
+  }, (line) => {
+    if (room.phase !== "over") return;   // the room already moved on; a late line would confuse
+    room.call = line;
+    push();
+  });
+
   clearTimeout(overTimer);
   if (AUTO_LOBBY) overTimer = setTimeout(() => {
     if (room.phase !== "over") return;
@@ -166,6 +186,7 @@ function uniqueName(raw) {
 
 function startRound() {
   clearTimeout(overTimer);
+  room.call = null;
   const m = mode();
   // Derived fresh, never stored: see seatBlocker in modes.js.
   if (seatBlocker(present(), mode().min)) { room.phase = "lobby"; return push(); }
@@ -219,7 +240,7 @@ function push() {
     ? m.census(ctx).filter((id) => !shipped.has(id)).length
     : 0;
   const spec = {
-    ...base, spectator: true, ticker: stats.ticker(), unseen,
+    ...base, spectator: true, ticker: stats.ticker(), unseen, call: room.call,
     view: room.phase === "live" ? m.spectate(ctx) : lobbyView(null),
   };
   for (const ws of spectators) send(ws, spec);
