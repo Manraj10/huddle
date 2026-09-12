@@ -6,12 +6,15 @@
 <style>
   :root { --ink:#f2f5fa; --dim:#8d97ab; }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-  html,body { height:100%; margin:0; overscroll-behavior:none; touch-action:manipulation; }
+  html,body { height:100%; margin:0; overscroll-behavior:none; }
   body { background:#0a0d14; color:var(--ink); user-select:none;
          font:600 17px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; }
+  /* touch-action does not inherit, so it has to sit on the elements that receive the gesture */
+  #app, .ring, .scores, .notice { touch-action:none; }
   #app { position:fixed; inset:0; display:grid; place-items:center; padding:24px; text-align:center;
          transition:background .12s linear; }
-  .big { font-size:clamp(56px,22vw,150px); line-height:.95; font-weight:800; letter-spacing:-.03em; }
+  .big { font-size:clamp(56px,22vw,150px); line-height:.95; font-weight:800; letter-spacing:-.03em;
+         font-variant-numeric:tabular-nums; }
   .title { font-size:19px; letter-spacing:.18em; text-transform:uppercase; margin-top:10px; }
   .sub { font-size:15px; font-weight:500; color:var(--dim); margin:8px auto 0; max-width:34ch; }
   .dim .big, .dim .title { color:var(--dim); }
@@ -37,6 +40,8 @@
   .scores .out { opacity:.35; text-decoration:line-through; }
   .notice { position:fixed; bottom:0; left:0; right:0; padding:14px; text-align:center;
             font-size:14px; font-weight:600; color:var(--dim); }
+  .warn { position:fixed; top:8px; left:50%; transform:translateX(-50%); background:#3a2a10; color:#ffc857;
+          padding:5px 12px; border-radius:999px; font-size:12px; font-weight:700; letter-spacing:.08em; }
 </style>
 
 <div id="app"></div>
@@ -47,53 +52,80 @@
 <script type="module">
 const $ = (id) => document.getElementById(id);
 const app = $("app"), ringEl = $("ring");
-const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`);
 
-let me = null, S = null, offset = 0, ac = null, osc = null, gain = null, joined = false;
+// Identity survives a reload or a dropped socket, so a phone that locked comes back as the SAME
+// player instead of a new dead one.
+const store = window.sessionStorage;
+const TOKEN = store.token || (store.token = (crypto.randomUUID?.() || String(Math.random()).slice(2)));
+
+let ws = null, me = null, S = null, offset = 0, joined = false, name = store.name || "";
+let ac = null, osc = null, gain = null, lastPong = Date.now(), dropped = false;
 const offsets = [];
+const serverNow = () => Date.now() + offset;
 
-// Clock sync: five round trips, keep the median offset. Every timed game hangs off this.
-const ping = () => ws.readyState === 1 && ws.send(JSON.stringify({ t: "ping", c: Date.now() }));
+// ---- clock sync. Every timed thing on every phone is computed from this, which is why Flash can
+// light up on all of them at the same instant without the server sending a frame. ----
+const ping = () => ws?.readyState === 1 && ws.send(JSON.stringify({ t: "ping", c: Date.now() }));
 function onPong(m) {
+  lastPong = Date.now();
   offsets.push(m.s - (m.c + (Date.now() - m.c) / 2));
   offsets.sort((a, b) => a - b);
   offset = offsets[offsets.length >> 1];
+  if (offsets.length > 24) offsets.shift();
 }
 
-// One oscillator whose pitch follows whatever urgency the server sends.
 function audioOn() {
   if (ac) return;
   ac = new (window.AudioContext || window.webkitAudioContext)();
+  if (navigator.audioSession) try { navigator.audioSession.type = "playback"; } catch {}
   osc = ac.createOscillator(); gain = ac.createGain();
   gain.gain.value = 0; osc.type = "sawtooth"; osc.frequency.value = 120;
   osc.connect(gain); gain.connect(ac.destination); osc.start();
 }
 function tone(level) {
   if (!gain) return;
-  gain.gain.setTargetAtTime(level > 0 ? 0.045 : 0, ac.currentTime, 0.07);
+  if (ac.state !== "running") ac.resume().catch(() => {});
+  gain.gain.setTargetAtTime(level > 0 ? 0.04 : 0, ac.currentTime, 0.07);
   if (level > 0) osc.frequency.setTargetAtTime(120 + level * 520, ac.currentTime, 0.12);
 }
 const buzz = (ms) => navigator.vibrate && navigator.vibrate(ms);
 
-// A swipe is a direction (meaning a person). A tap is a tap. Games decide what those mean.
+// ---- input ----
 let down = null;
 addEventListener("pointerdown", (e) => { down = { x: e.clientX, y: e.clientY }; });
+addEventListener("pointercancel", () => { down = null; });
 addEventListener("pointerup", (e) => {
   if (!down || !joined) return;
   const dx = e.clientX - down.x, dy = e.clientY - down.y, far = Math.hypot(dx, dy) > 38;
   down = null;
-  if (far) { ws.send(JSON.stringify({ t: "act", a: "swipe", angle: Math.atan2(dy, dx) })); buzz(18); }
-  else ws.send(JSON.stringify({ t: "act", a: "tap" }));
+  if (far) { ws?.send(JSON.stringify({ t: "act", a: "swipe", angle: Math.atan2(dy, dx) })); buzz(18); }
+  else ws?.send(JSON.stringify({ t: "act", a: "tap" }));
 });
 
-ws.onopen = () => { for (let i = 0; i < 5; i++) setTimeout(ping, i * 110); render(); };
-ws.onclose = () => { S = null; app.innerHTML = `<div><div class="title">disconnected</div><div class="sub">reload to rejoin</div></div>`; };
-ws.onmessage = (ev) => {
-  const m = JSON.parse(ev.data);
-  if (m.t === "pong") return onPong(m);
-  if (m.t === "hello") { me = m.id; joined = true; return; }
-  if (m.t === "view") { S = m; render(); }
-};
+// ---- connection, with reconnect. iOS freezes sockets on screen lock and often never fires
+// onclose, so silence on the ping/pong is the real signal. ----
+function connect() {
+  ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`);
+  ws.onopen = () => {
+    dropped = false; lastPong = Date.now();
+    for (let i = 0; i < 5; i++) setTimeout(ping, i * 110);
+    if (name) ws.send(JSON.stringify({ t: "join", name, token: TOKEN }));
+    render();
+  };
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.t === "pong") return onPong(m);
+    if (m.t === "hello") { me = m.id; joined = true; return; }
+    if (m.t === "view") { S = m; render(); }
+  };
+  ws.onclose = () => { dropped = true; render(); setTimeout(connect, 700); };
+  ws.onerror = () => ws.close();
+}
+setInterval(() => {
+  ping();
+  if (joined && Date.now() - lastPong > 9000 && ws?.readyState === 1) ws.close();
+}, 3000);
+connect();
 
 function drawRing(ring) {
   ringEl.innerHTML = "";
@@ -109,28 +141,57 @@ function drawRing(ring) {
 }
 
 function render() {
+  document.querySelector(".warn")?.remove();
+  if (dropped) {
+    const w = document.createElement("div");
+    w.className = "warn"; w.textContent = "RECONNECTING";
+    document.body.append(w);
+  }
+
   if (!S) {
     app.style.background = "#0a0d14";
     app.innerHTML = `<div><div class="big" style="font-size:46px">HUDDLE</div>
       <div class="sub">party games that live across everyone&rsquo;s phones</div>
-      <div style="margin-top:18px"><input id="n" placeholder="your name" maxlength="12" autocomplete="off"></div>
+      <div style="margin-top:18px"><input id="n" placeholder="your name" maxlength="12" autocomplete="off" value="${name}"></div>
       <button id="j">Join</button></div>`;
-    $("j").onclick = () => { audioOn(); ws.send(JSON.stringify({ t: "join", name: $("n").value || "player" })); };
+    $("j").onclick = () => {
+      audioOn();
+      name = store.name = ($("n").value || "player").slice(0, 12);
+      ws?.send(JSON.stringify({ t: "join", name, token: TOKEN }));
+    };
     $("n").onkeydown = (e) => { if (e.key === "Enter") $("j").click(); };
     return;
   }
 
   const v = S.view || {};
-  app.style.background = v.bg || "#0a0d14";
-  app.style.color = v.ink || "#f2f5fa";
-  tone(v.tone || 0);
+  // Time-derived fields are computed HERE, off the synced clock — never sent pre-rendered.
+  let big = v.big, bg = v.bg, ink = v.ink, title = v.title, sub = v.sub, urgency = 0;
+  if (v.countdownTo) {
+    const left = Math.max(0, v.countdownTo - serverNow());
+    big = (left / 1000).toFixed(1);
+  }
+  if (v.toneFrom && v.toneTo) urgency = Math.max(0, Math.min(1, (serverNow() - v.toneFrom) / (v.toneTo - v.toneFrom)));
+  if (v.hot) bg = `rgb(${86 + urgency * 152},${36 - urgency * 26},42)`;
+  if (v.flashAt) {
+    const lit = serverNow() >= v.flashAt;
+    big = lit ? v.litBig : v.waitBig;
+    if (lit) { bg = v.litBg; ink = v.litInk; if (!render.lit) { buzz(35); render.lit = true; } }
+    else render.lit = false;
+    title = lit ? "" : v.waitTitle;
+    sub = lit ? "" : v.waitSub;
+  }
+  if (v.braced) bg = "#122a1e";
+
+  app.style.background = bg || "#0a0d14";
+  app.style.color = ink || "#f2f5fa";
+  tone(v.tone ? Math.max(0.05, urgency) : 0);
 
   $("scores").innerHTML = S.players.map((p) =>
     `<span class="${p.alive ? "" : "out"}">${p.name}${p.score ? ` <i>${p.score}</i>` : ""}</span>`).join("");
   $("notice").textContent = S.phase === "live" ? "" : (S.notice || "");
 
   if (v.lobby) {
-    app.innerHTML = `<div><div class="title">${S.modeName}</div><div class="sub">${v.sub || ""}</div>
+    app.innerHTML = `<div><div class="title">${S.modeName}</div><div class="sub">${sub || ""}</div>
       <div class="modes" id="modes">${S.modes.map((m) =>
         `<button class="ghost${m.key === S.mode ? " on" : ""}" data-k="${m.key}">${m.name}
           <small>${m.blurb} &middot; ${m.min}+ players</small></button>`).join("")}</div>
@@ -142,15 +203,19 @@ function render() {
   }
 
   app.innerHTML = `<div class="${v.dim ? "dim" : ""}">
-    ${v.big != null ? `<div class="big ${v.pulse ? "pulse" : ""}">${v.big}</div>` : ""}
-    ${v.title ? `<div class="title">${v.title}</div>` : ""}
-    ${v.sub ? `<div class="sub">${v.sub}</div>` : ""}</div>`;
+    ${big != null ? `<div class="big ${v.pulse ? "pulse" : ""}">${big}</div>` : ""}
+    ${title ? `<div class="title">${title}</div>` : ""}
+    ${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
   drawRing(v.ring);
 }
 
-setInterval(() => { if (S && S.phase === "live") render(); }, 90);   // countdowns move between messages
-setInterval(ping, 4000);
+setInterval(() => { if (S && S.phase === "live") render(); }, 60);
 addEventListener("resize", () => { if (S) render(); });
+addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") return;
+  ac?.resume().catch(() => {});
+  if (!ws || ws.readyState > 1) connect();
+});
 
 if ("wakeLock" in navigator) {
   const hold = () => navigator.wakeLock.request("screen").catch(() => {});

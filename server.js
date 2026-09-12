@@ -35,12 +35,16 @@ const room = {
   notice: "",                // one line shown to everyone, e.g. "ALPHA is out"
 };
 let nextId = 1;
+let gapTimer = null;
+let lastChange = Date.now();
 const spectators = new Set();
 
 const now = () => Date.now();
 const mode = () => MODES[room.modeKey];
 const players = () => [...room.players.values()];
-const alive = () => players().filter((p) => p.alive);
+// A phone whose socket is gone cannot hold a bomb or be thrown to, even during the rejoin
+// grace window. Without this the round wedges the moment the holder's screen locks.
+const alive = () => players().filter((p) => p.alive && !p.gone);
 const send = (ws, m) => ws.readyState === 1 && ws.send(JSON.stringify(m));
 
 function seats() {
@@ -66,12 +70,14 @@ const ctx = {
     }, { p: others[0], d: Infinity }).p;
   },
   eliminate(p, why) {
-    if (!p?.alive) return;
-    p.alive = false;
-    room.notice = why || `${p.name} is out`;
+    if (p?.alive) { p.alive = false; room.notice = why || `${p.name} is out`; }
+    else room.notice = why || room.notice;
     const left = alive();
-    if (left.length <= 1) finish(left[0] || null);
-    else { room.phase = "gap"; push(); setTimeout(() => startRound(), 2400); }
+    if (left.length <= 1) return finish(left[0] || null);
+    room.phase = "gap";
+    push();
+    clearTimeout(gapTimer);
+    gapTimer = setTimeout(() => startRound(), 2400);
   },
   award(p, n = 1) { if (p) p.score += n; },
   finishRound(winner) { finish(winner); },
@@ -111,6 +117,7 @@ function push() {
     players: players().map((p) => ({ id: p.id, name: p.name, alive: p.alive, score: p.score, seat: p.seat })),
   };
   for (const p of players()) {
+    if (p.gone) continue;
     send(p.ws, { ...base, you: { id: p.id, alive: p.alive, score: p.score }, view: viewFor(p) });
   }
   const spec = { ...base, spectator: true, view: room.phase === "live" ? m.spectate(ctx) : lobbyView(null) };
@@ -129,7 +136,12 @@ const viewFor = (p) => (room.phase === "live" ? mode().view(ctx, p) : lobbyView(
 
 setInterval(() => {
   if (room.phase !== "live") return;
-  if (mode().tick(ctx, now())) push();     // a mode returns true when something changed
+  if (mode().tick(ctx, now())) { lastChange = now(); push(); }
+  else if (now() - lastChange > 45000) {   // a wedged round is worse than a restarted one
+    room.notice = "round reset";
+    lastChange = now();
+    startRound();
+  }
 }, 50);
 
 const wss = new WebSocketServer({ server: http });
@@ -144,9 +156,21 @@ wss.on("connection", (ws, req) => {
     let msg; try { msg = JSON.parse(buf); } catch { return; }
     if (msg.t === "ping") return send(ws, { t: "pong", c: msg.c, s: now() });
     if (msg.t === "join") {
-      me = { id: nextId++, name: String(msg.name || "player").slice(0, 12), ws, alive: room.phase === "lobby", score: 0, seat: 0 };
-      room.players.set(me.id, me);
-      seats(); send(ws, { t: "hello", id: me.id }); return push();
+      const token = String(msg.token || "").slice(0, 64);
+      const back = token && [...room.players.values()].find((p) => p.token === token);
+      if (back) { back.ws = ws; back.gone = false; me = back; }
+      else {
+        me = { id: nextId++, token, name: String(msg.name || "player").slice(0, 12), ws,
+               alive: room.phase === "lobby", score: 0, seat: 0, gone: false };
+        room.players.set(me.id, me);
+        seats();
+      }
+      send(ws, { t: "hello", id: me.id });
+      return push();
+    }
+    if (msg.t === "seat" && me) {          // players place themselves where they actually sit
+      me.seat = Number(msg.angle) || 0;
+      return push();
     }
     if (!me) return;
     if (msg.t === "start") return startGame(msg.mode);
@@ -155,10 +179,14 @@ wss.on("connection", (ws, req) => {
     }
   });
   ws.on("close", () => {
-    if (!me) return;
-    room.players.delete(me.id);
-    seats();
-    mode().leave?.(ctx, me);
+    if (!me || me.ws !== ws) return;       // an old socket closing after a rejoin is not a leave
+    me.gone = true;
+    setTimeout(() => {                     // grace period: phones drop sockets on screen lock
+      if (!me.gone) return;
+      room.players.delete(me.id);
+      if (!room.players.size) { room.phase = "lobby"; room.winner = null; }
+      push();
+    }, 9000);
     push();
   });
 });
