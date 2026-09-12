@@ -245,14 +245,16 @@ function draw() {
     ? map.players
     : (S?.players || []).map((p) => ({ id: p.id, name: p.name, angle: p.seat, alive: p.alive }));
 
-  // table
-  ctx.beginPath();
-  ctx.arc(cx, cy, r + 28, 0, Math.PI * 2);
-  ctx.fillStyle = "#101624";
-  ctx.fill();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = "#2a3348";
-  ctx.stroke();
+  // table — the ring view sizes its own to fit the phones standing around it
+  if (v.kind !== "ring") {
+    ctx.beginPath();
+    ctx.arc(cx, cy, r + 28, 0, Math.PI * 2);
+    ctx.fillStyle = "#101624";
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "#2a3348";
+    ctx.stroke();
+  }
 
   // fuse ring — shrinking toward the table as the shared clock burns down
   if (v.countdownTo && S?.phase === "live") {
@@ -300,9 +302,10 @@ function draw() {
     }
   }
 
-  // Modes with no countdown and no flash (Relay, Chain, Wiretap, Duel) still have something to
-  // say in the middle of the table. Without this the room screen went blank for four of seven games.
-  if (S?.phase === "live" && !v.countdownTo && !v.flashAt) {
+  // Modes with no countdown and no flash (Relay, Chain, Wiretap) still have something to say in
+  // the middle of the table. Without this the room screen went blank for four of seven games.
+  // The ring draws its own middle, so it is excluded.
+  if (S?.phase === "live" && !v.countdownTo && !v.flashAt && v.kind !== "ring") {
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     if (v.big != null) {
@@ -333,6 +336,128 @@ function draw() {
     ctx.font = "800 28px ui-sans-serif, system-ui";
     ctx.textAlign = "center";
     ctx.fillText(S.notice || "next round", cx, cy);
+  }
+
+  // ---- the table, as phones ----------------------------------------------------
+  // Every handset drawn as a rectangle at the seat angle its owner declared, with its ship and
+  // its shots inside it, and the shots that are between two handsets drawn in the empty space —
+  // glowing, because right now they are on the server and on nobody's screen in this room.
+  if (v.kind === "ring" && S?.phase === "live") {
+    const ph = v.phones || [];
+    const n = ph.length;
+    const half = Math.min(w, h) / 2;
+    const LABEL = 40;                                // room for the name and the health pips
+    const pw = Math.max(52, Math.min(120, half * 0.30));
+    const phh = pw * 1.7;
+    // A phone is drawn rotated a quarter turn to face the table, so its HEIGHT is what sticks out
+    // radially. Budget for that and the label, or the phones at 0 and pi get sliced off the edge.
+    const orbit = Math.max(phh * 0.6, half - LABEL - phh / 2 - 6);
+    const table = Math.max(24, orbit - phh / 2 - 14);
+    const where = (angle) => pos(angle, cx, cy, orbit);
+
+    // local 0-1 coords inside a phone -> screen, for a phone standing at that seat angle
+    const into = (angle, x, y) => {
+      const c = where(angle);
+      const rot = angle + Math.PI / 2;               // the screen faces the middle of the table
+      const lx = (x - 0.5) * pw, ly = (y - 0.5) * phh;
+      return { x: c.x + lx * Math.cos(rot) - ly * Math.sin(rot),
+               y: c.y + lx * Math.sin(rot) + ly * Math.cos(rot) };
+    };
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, table, 0, Math.PI * 2);
+    ctx.fillStyle = "#0b1020";
+    ctx.strokeStyle = "#1d2436";
+    ctx.lineWidth = 2;
+    ctx.fill();
+    ctx.stroke();
+
+    for (const q of ph) {
+      const c = where(q.angle);
+      ctx.save();
+      ctx.translate(c.x, c.y);
+      ctx.rotate(q.angle + Math.PI / 2);
+      ctx.fillStyle = q.gone ? "#12151d" : "#0e1422";
+      ctx.strokeStyle = q.hp > 0 && !q.gone ? "#2f3a52" : "#1b2030";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.roundRect(-pw / 2, -phh / 2, pw, phh, 10);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+
+      // the ship, in its own screen
+      if (q.hp > 0 && !q.gone) {
+        const sp = into(q.angle, q.x, q.y);
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, 7, 0, Math.PI * 2);
+        ctx.fillStyle = "#ff7a3c";
+        ctx.fill();
+      }
+
+      const label = pos(q.angle, cx, cy, orbit + phh / 2 + 16);
+      ctx.fillStyle = q.gone ? "#5a6478" : "#f2f5fa";
+      ctx.font = "800 13px ui-sans-serif, system-ui";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      // Keep the name inside the canvas. The ring is sized off the SHORT axis, so on a wide
+      // screen the seats at 0 and pi sit closest to the edges and their labels are the ones that
+      // get sliced in half — and a name you cannot read is a person you cannot aim at.
+      const name = (q.name || "?").toUpperCase();
+      const halfText = ctx.measureText(name).width / 2 + 4;
+      label.x = Math.min(w - halfText, Math.max(halfText, label.x));
+      label.y = Math.min(h - 20, Math.max(12, label.y));
+      ctx.fillText(name, label.x, label.y);
+      ctx.fillStyle = q.hp > 0 ? "#3dd68c" : "#ff5a4e";
+      ctx.font = "800 12px ui-sans-serif, system-ui";
+      ctx.fillText(q.hp > 0 ? "|".repeat(q.hp) : "out", label.x, label.y + 15);
+    }
+
+    const laneAngle = (lane) => ph.find((q) => q.lane === lane)?.angle ?? 0;
+    let hidden = 0;
+    for (const b of v.shots || []) {
+      if (b.arriveAt) {
+        // In the gap. Draw it between the phone it left and the phone it is entering, moving
+        // across the real empty space, and let this screen compute the progress off its own clock.
+        hidden++;
+        const span = Math.max(60, v.gapMs || 250);
+        const t = Math.max(0, Math.min(1, 1 - (b.arriveAt - serverNow()) / span));
+        // Along the RIM, not across the table. Interpolating the two phone positions directly
+        // drags the shot through the middle, which is the one path it never takes: these two
+        // people are sitting next to each other and the gap it is crossing is the air between
+        // their handsets. Go the short way round, so the wrap from the last seat to the first
+        // does not send it the wrong way about.
+        const a0 = laneAngle(b.from);
+        const step = Math.atan2(Math.sin(laneAngle(b.lane) - a0), Math.cos(laneAngle(b.lane) - a0));
+        const { x, y } = pos(a0 + step * t, cx, cy, orbit);
+        ctx.beginPath();
+        ctx.arc(x, y, 6, 0, Math.PI * 2);
+        ctx.fillStyle = "#ffc857";
+        ctx.shadowColor = "#ffc857";
+        ctx.shadowBlur = 22;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      } else {
+        const sp = into(laneAngle(b.lane), b.x, b.y);
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, 4, 0, Math.PI * 2);
+        ctx.fillStyle = "#ff6b5a";
+        ctx.fill();
+      }
+    }
+
+    if (hidden) {
+      ctx.fillStyle = "#ffc857";
+      ctx.font = "800 13px ui-sans-serif, system-ui";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("ON NOBODY'S SCREEN", cx, cy + 14);
+      ctx.font = "800 34px ui-sans-serif, system-ui";
+      ctx.fillText(String(hidden), cx, cy - 14);
+    }
+
+    requestAnimationFrame(draw);
+    return;                                          // the ring replaces the dot-on-a-circle view
   }
 
   const byId = new Map(players.map((p) => [p.id, p]));

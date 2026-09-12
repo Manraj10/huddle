@@ -785,16 +785,42 @@ export const MODES = {
      * becomes a measurement of the frames we really sent.
      */
     census(ctx) { return (ctx.data.bullets || []).map((b) => b.id); },
+    /**
+     * The room screen gets the whole table: every phone as a rectangle at the seat angle its owner
+     * declared, the ships inside them, and — the part no player is allowed — the shots currently
+     * crossing the physical gaps between handsets. A hidden-information game gives a bystander
+     * nothing to look at, and this is the screen where the hidden part becomes the show.
+     *
+     * gapMs is the crossing DURATION, not a countdown: the deadline is arriveAt and this screen
+     * does its own arithmetic against its own synced clock, same as everything else here.
+     */
     spectate(ctx) {
       const d = ctx.data;
-      const name = (id) => ctx.players().find((q) => q.id === id)?.name ?? "—";
+      const n = d.order.length;
+      const at = (id) => ctx.players().find((q) => q.id === id);
       const inGap = d.bullets.filter((b) => b.arriveAt).length;
       return {
-        kind: "text", big: String(d.bullets.length),
-        title: d.order.map((id) => `${name(id)} ${"|".repeat(Math.max(0, d.ship[id]?.hp ?? 0))}`).join("   "),
+        kind: "ring",
+        gapMs: GAP,
+        phones: d.order.map((id, lane) => {
+          const p = at(id), sh = d.ship[id] || {};
+          return {
+            id, lane, name: p?.name ?? "—", angle: p?.seat ?? 0,
+            hp: Math.max(0, sh.hp ?? 0), x: sh.x ?? 0.5, y: sh.y ?? 0.5,
+            gone: !ctx.alive().some((q) => q.id === id),
+          };
+        }),
+        shots: d.bullets.map((b) => ({
+          id: b.id, lane: b.lane, x: b.x, y: b.y, owner: b.owner,
+          // While arriveAt is set this shot is on the server and on no phone. The lane it LEFT is
+          // the one behind it, which is what lets this screen draw it in the empty space.
+          arriveAt: b.arriveAt || 0,
+          from: b.arriveAt ? ((b.lane - Math.sign(b.vx) % n + n * 2) % n) : b.lane,
+        })),
+        title: d.order.map((id) => `${at(id)?.name ?? "—"} ${"|".repeat(Math.max(0, d.ship[id]?.hp ?? 0))}`).join("   "),
         sub: inGap
-          ? `${inGap} in the gaps between phones — on nobody's screen but this one`
-          : "the whole row, gaps included",
+          ? `${inGap} crossing the gaps — on nobody's screen but this one`
+          : "the whole table, gaps included",
         map: { players: ctx.alive().map((q) => ({ id: q.id, name: q.name, angle: q.seat })) },
       };
     },
