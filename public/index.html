@@ -1,61 +1,309 @@
 <!doctype html>
+<html lang="en">
+<head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
-<meta name="theme-color" content="#0a0d14">
+<meta name="theme-color" content="#0c0b12">
+<meta name="color-scheme" content="dark">
 <title>Huddle</title>
-<style>
-  :root { --ink:#f2f5fa; --dim:#8d97ab; }
-  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-  html,body { height:100%; margin:0; overscroll-behavior:none; }
-  body { background:#0a0d14; color:var(--ink); user-select:none;
-         font:600 17px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; }
-  /* touch-action does not inherit, so it has to sit on the elements that receive the gesture */
-  #app, .ring, .scores, .notice { touch-action:none; }
-  #app { position:fixed; inset:0; display:grid; place-items:center; padding:24px; text-align:center;
-         transition:background .12s linear; }
-  .big { font-size:clamp(56px,22vw,150px); line-height:.95; font-weight:800; letter-spacing:-.03em;
-         font-variant-numeric:tabular-nums; }
-  .title { font-size:19px; letter-spacing:.18em; text-transform:uppercase; margin-top:10px; }
-  .sub { font-size:15px; font-weight:500; color:var(--dim); margin:8px auto 0; max-width:34ch; }
-  .dim .big, .dim .title { color:var(--dim); }
-  .pulse { animation:p .62s infinite alternate ease-in-out; }
-  @keyframes p { from { transform:scale(1); } to { transform:scale(1.07); } }
-  @media (prefers-reduced-motion:reduce) { .pulse { animation:none; } }
-  .ring { position:fixed; inset:0; pointer-events:none; }
-  .ring b { position:absolute; transform:translate(-50%,-50%); font-size:13px; font-weight:800;
-            letter-spacing:.08em; color:#aab4c8; text-transform:uppercase; }
-  input { font:600 20px ui-sans-serif,system-ui,sans-serif; padding:15px; border-radius:14px;
-          border:1px solid #2b3345; background:#141a26; color:var(--ink); width:min(78vw,320px); text-align:center; }
-  button { font:700 17px ui-sans-serif,system-ui,sans-serif; padding:15px 26px; border-radius:14px; border:0;
-           background:var(--ink); color:#0a0d14; margin:6px 4px 0; }
-  button.ghost { background:#1a2130; color:var(--ink); border:1px solid #2b3345; }
-  button.on { background:#ffc857; color:#1a1405; }
-  .modes { display:grid; gap:8px; margin:14px auto 4px; width:min(88vw,420px); }
-  .modes button { width:100%; text-align:left; padding:13px 16px; }
-  .modes small { display:block; font-weight:500; font-size:13px; opacity:.7; margin-top:3px; }
-  .scores { position:fixed; top:0; left:0; right:0; padding:10px 14px; display:flex; gap:12px;
-            justify-content:center; flex-wrap:wrap; font-size:12px; font-weight:700; letter-spacing:.1em;
-            text-transform:uppercase; color:#7d879b; }
-  .scores i { font-style:normal; opacity:.45; }
-  .scores .out { opacity:.35; text-decoration:line-through; }
-  .notice { position:fixed; bottom:0; left:0; right:0; padding:14px; text-align:center;
-            font-size:14px; font-weight:600; color:var(--dim); }
-  .reset { position:fixed; top:6px; right:8px; z-index:5; background:#161d2b; color:#7d879b;
-           border:1px solid #2b3345; border-radius:999px; padding:7px 12px; margin:0;
-           font-size:12px; font-weight:800; letter-spacing:.1em; }
-  .warn { position:fixed; top:8px; left:50%; transform:translateX(-50%); background:#3a2a10; color:#ffc857;
-          padding:5px 12px; border-radius:999px; font-size:12px; font-weight:700; letter-spacing:.08em; }
-</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@700;800&family=Source+Sans+3:wght@400;600&display=swap">
 
+<style>
+/* ============================================================================
+   TOKENS. Nothing below this block invents a colour, a size or a duration.
+   One full-screen palette per state, because the person holding this phone is
+   looking at the other people in the room, not at the screen. State has to
+   survive being read in a glance, at arm's length, off the light on a face.
+   ========================================================================= */
+:root {
+  --display: "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
+  --text: "Source Sans 3", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --ink: #f4f6fb;
+  --dim: #989cb2;
+  --line: #262234;
+  --raise: #16131f;
+
+  --idle: #0c0b12;              /* almost black, cool, biased a touch toward the accent */
+  --hold-cold: 108, 38, 22;     /* the fuse at full length */
+  --hold-hot: 255, 74, 32;      /* the fuse about to end */
+  --brace: #06251e;
+  --brace-ink: #74f0bd;
+  --lit: #f1f5ff;
+  --lit-ink: #0c0b12;
+  --out: #131319;
+  --out-ink: #6f7388;
+  --win: #d7f24a;               /* the one celebratory colour in the system, used exactly once */
+  --win-ink: #131a02;
+  --you: #ff7a3c;               /* only ever means "this is you" */
+
+  --gutter: 0px;                /* side space the hero gives up to the ring names */
+  --pulse: 720ms;               /* rewritten from fuse urgency: 720ms -> 180ms */
+  --tense: 0px;                 /* same urgency as weight, for reduced motion and for silence */
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; margin: 0; overflow: hidden; overscroll-behavior: none; }
+body {
+  background: var(--idle); color: var(--ink); user-select: none;
+  font: 400 16px/1.45 var(--text);
+  -webkit-text-size-adjust: 100%;
+}
+/* touch-action does not inherit. It has to sit on whatever receives the gesture. */
+#app, .screen, .ring, .scores, .notice, .seatpad { touch-action: none; }
+
+#app {
+  position: fixed; inset: 0;
+  transition: background 120ms linear;
+  background: var(--idle);
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+.screen { position: absolute; inset: 0; display: grid; }
+.screen[hidden] { display: none; }
+
+/* ---------------------------------------------------------------- type scale */
+.big {
+  display: inline-block; white-space: nowrap;
+  font: 800 clamp(52px, 20vw, 132px)/0.92 var(--display);
+  letter-spacing: -0.035em;
+  font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1;
+}
+.clock {
+  font: 700 clamp(20px, 6vw, 30px)/1 var(--display);
+  font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1;
+  letter-spacing: -0.02em; opacity: .75; margin-top: 10px;
+}
+.title {
+  font: 600 clamp(15px, 4.4vw, 19px)/1.2 var(--text);
+  letter-spacing: .16em; text-transform: uppercase; margin-top: 12px;
+}
+.sub { font: 400 15px/1.4 var(--text); color: var(--dim); margin: 8px auto 0; max-width: 30ch; }
+.on-light .sub { color: #4a4f63; }
+
+/* -------------------------------------------------------------------- chrome */
+.scores {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 3;
+  padding: 9px 60px 9px 14px; display: flex; gap: 11px; justify-content: center; flex-wrap: wrap;
+  font: 600 11px/1 var(--text); letter-spacing: .12em; text-transform: uppercase; color: #7b7f94;
+  pointer-events: none;
+}
+.scores i { font-style: normal; opacity: .5; }
+.scores .out { opacity: .32; text-decoration: line-through; }
+.scores .me { color: var(--you); }
+
+.notice {
+  position: fixed; left: 0; right: 0; bottom: 14px; z-index: 3; padding: 0 16px;
+  text-align: center; font: 600 13px/1.3 var(--text); letter-spacing: .06em;
+  text-transform: uppercase; color: var(--dim); pointer-events: none;
+}
+.on-light .notice { color: #5a5f73; }
+
+.reset {
+  position: fixed; top: 6px; right: 8px; z-index: 6;
+  background: #17141f; color: #7b7f94; border: 1px solid var(--line); border-radius: 999px;
+  padding: 8px 13px; margin: 0; font: 600 11px/1 var(--text); letter-spacing: .14em;
+}
+.warn {
+  position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 6;
+  background: #3a2a10; color: #ffc857; padding: 5px 12px; border-radius: 999px;
+  font: 600 11px/1 var(--text); letter-spacing: .1em;
+}
+.warn[hidden] { display: none; }
+
+/* The fuse, drawn. Every phone gets this, holder or not, because the rising tone is already
+   shared — only WHO holds it is secret. This is how a deaf player reads the tension. */
+.fuse { position: fixed; left: 0; right: 0; bottom: 0; height: 5px; z-index: 4; background: #ffffff14; }
+.fuse[hidden] { display: none; }
+.fuse i { display: block; height: 100%; width: 100%; background: var(--ink); transform-origin: left center; }
+
+/* -------------------------------------------------------------- state chip (shape, not colour) */
+.chip {
+  position: absolute; top: 40px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 9px;
+  font: 600 11px/1 var(--text); letter-spacing: .16em; text-transform: uppercase; opacity: .62;
+}
+.chip[hidden] { display: none; }
+.shape { width: 13px; height: 13px; border: 2px solid currentColor; }
+.shape.circle { border-radius: 50%; }                               /* waiting, nothing known */
+.shape.diamond { transform: rotate(45deg); background: currentColor; }   /* you are holding it */
+.shape.triangle { width: 0; height: 0; border: 7px solid transparent; border-bottom-color: currentColor; } /* braced */
+.shape.square { background: currentColor; }                          /* out */
+
+/* ------------------------------------------------------------------ play screen */
+#play { place-items: center; text-align: center; padding: 0 var(--gutter); }
+#play .hero { max-width: 100%; }
+#play.arena-on .hero, #play.arena-on .chip { display: none; }
+
+/* Ring names live in the gutters the hero gave up. They are the swipe targets, so their angles
+   are the truth — the text moves, not them. */
+.ring { position: fixed; inset: 0; z-index: 2; pointer-events: none; }
+.ring b {
+  position: absolute; transform: translate(-50%, -50%);
+  font: 600 11px/1 var(--text); letter-spacing: .1em; text-transform: uppercase;
+  color: #a7abbe; white-space: nowrap;
+}
+.ring b::before {
+  content: ""; display: block; width: 5px; height: 5px; border-radius: 50%;
+  background: currentColor; margin: 0 auto 5px; opacity: .7;
+}
+.on-light .ring b { color: #5a5f73; }
+
+#arena { position: absolute; inset: 0; width: 100%; height: 100%; display: none; }
+#play.arena-on #arena { display: block; }
+
+/* ------------------------------------------------------------------ join screen */
+#join { place-items: center; text-align: center; padding: 24px; align-content: center; }
+.wordmark {
+  font: 800 clamp(54px, 17vw, 104px)/0.86 var(--display); letter-spacing: -0.05em;
+}
+.lede {
+  font: 700 clamp(19px, 5.4vw, 26px)/1.25 var(--display); letter-spacing: -0.015em;
+  margin: 16px auto 0; max-width: 17ch;
+}
+.fine { font: 400 13px/1.4 var(--text); color: var(--dim); margin: 12px auto 0; max-width: 28ch; }
+input {
+  font: 600 19px var(--text); padding: 15px; border-radius: 14px; border: 1px solid var(--line);
+  background: var(--raise); color: var(--ink); width: min(78vw, 300px); text-align: center;
+}
+input::placeholder { color: #6a6e82; }
+button {
+  font: 600 16px var(--text); padding: 15px 26px; border-radius: 14px; border: 0;
+  background: var(--ink); color: var(--idle); margin: 6px 4px 0;
+}
+button.ghost { background: var(--raise); color: var(--ink); border: 1px solid var(--line); }
+button:disabled { opacity: .38; }
+
+/* ----------------------------------------------------------------- lobby + seats */
+#lobby {
+  grid-template-rows: auto 1fr auto; align-items: start;
+  padding: 44px 16px calc(14px + env(safe-area-inset-bottom));
+  touch-action: pan-y; overflow-y: auto; text-align: center;
+}
+/* The instruction IS the mechanic, so it is the biggest thing on the screen. */
+.lead {
+  font: 800 clamp(23px, 6.6vw, 34px)/1.08 var(--display); letter-spacing: -0.03em;
+  margin: 0 auto; max-width: 16ch;
+}
+.seatpad { display: grid; place-items: center; padding: 10px 0; min-height: 0; }
+.seats {
+  position: relative; width: min(74vw, 42vh, 330px); aspect-ratio: 1;
+  border: 1px dashed var(--line); border-radius: 50%;
+}
+.seats::after {
+  content: "table"; position: absolute; inset: 0; display: grid; place-items: center;
+  font: 600 10px var(--text); letter-spacing: .22em; text-transform: uppercase; color: #4d5164;
+}
+.seat {
+  position: absolute; transform: translate(-50%, -50%); display: grid; place-items: center; gap: 4px;
+  font: 600 10px/1 var(--text); letter-spacing: .1em; text-transform: uppercase; color: #9c9fb4;
+}
+.seat s { display: block; width: 13px; height: 13px; border-radius: 50%; background: #454a5e; }
+.seat.mine { color: var(--you); z-index: 2; }
+.seat.mine s {
+  width: 30px; height: 30px; background: var(--you);
+  box-shadow: 0 0 0 7px rgba(255, 122, 60, .16);
+}
+.seat.mine.held s { box-shadow: 0 0 0 13px rgba(255, 122, 60, .22); }
+.modes { display: grid; gap: 7px; width: min(92vw, 420px); margin: 6px auto 0; }
+.modes button {
+  width: 100%; text-align: left; padding: 12px 15px; margin: 0;
+  display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px;
+  font: 600 15px var(--text);
+}
+.modes small { grid-column: 1; font: 400 12px/1.35 var(--text); opacity: .62; }
+.modes em { grid-row: 1 / span 2; font: 600 10px var(--text); letter-spacing: .14em; font-style: normal; opacity: .55; }
+.modes button.on { border-color: #4a4356; background: #211c2d; }
+
+@media (orientation: landscape) and (max-height: 520px) {
+  #lobby { grid-template-columns: 1fr 1fr; grid-template-rows: auto 1fr; padding-top: 38px; }
+  .lead { grid-column: 1 / -1; font-size: clamp(19px, 4vw, 26px); }
+  .seatpad { grid-column: 1; }
+  .seats { width: min(40vw, 56vh); }
+  .modes { grid-column: 2; align-self: center; }
+}
+
+/* ============================================================================
+   MOTION. Four animations, and each one carries information a static screen
+   could not. Anything beyond these four reads as noise.
+   ========================================================================= */
+@keyframes pulse { from { transform: scale(1); } to { transform: scale(1.055); } }
+@keyframes punch {
+  0%   { transform: scale(.8);   filter: brightness(3.4) saturate(.2); }
+  38%  { transform: scale(1.06); filter: none; }
+  100% { transform: scale(1);    filter: none; }
+}
+@keyframes streak { from { opacity: .85; transform: translate(-50%, -50%) scaleX(.15); }
+                    to   { opacity: 0;   transform: translate(calc(-50% + var(--tx)), calc(-50% + var(--ty))) scaleX(1); } }
+@keyframes cut { 0% { background: var(--lit); } 50% { background: #000; } 100% { background: var(--out); } }
+
+.hero.pulsing { animation: pulse var(--pulse) infinite alternate ease-in-out; }
+#play.punching { animation: punch 320ms ease-out; }
+#app.cutting { animation: cut 200ms steps(1, end) 1; }   /* elimination is a cut. No easing. */
+.streak {
+  position: fixed; top: 50%; left: 50%; z-index: 5; pointer-events: none;
+  width: 46vw; height: 4px; border-radius: 4px; background: var(--ink);
+  transform-origin: left center; animation: streak 300ms ease-out forwards;
+}
+
+/* Under reduced motion nothing moves. Urgency becomes weight and colour instead: the hero grows
+   a ring that thickens as the fuse burns, and the fuse bar is still draining. */
+@media (prefers-reduced-motion: reduce) {
+  .hero.pulsing, #play.punching, #app.cutting, .streak { animation: none; }
+  .streak { display: none; }
+  .hero.pulsing {
+    outline: var(--tense) solid currentColor; outline-offset: 14px; border-radius: 8px;
+  }
+  #app { transition: none; }
+}
+</style>
+</head>
+
+<body>
 <button class="reset" id="reset" title="back to lobby">RESET</button>
-<div id="app"></div>
+<div class="warn" id="warn" hidden>RECONNECTING</div>
+
+<div id="app">
+  <!-- the poster: what a stranger reads over someone's shoulder -->
+  <section class="screen" id="join">
+    <div>
+      <div class="wordmark">HUDDLE</div>
+      <p class="lede">One link. Every phone sees a different truth.</p>
+      <div style="margin-top:20px"><input id="n" placeholder="your name" maxlength="12" autocomplete="off" enterkeyhint="go"></div>
+      <button id="j">Join</button>
+      <p class="fine">No app, no account. Everyone has to be in the same room &mdash; that is the point.</p>
+    </div>
+  </section>
+
+  <section class="screen" id="lobby" hidden>
+    <h1 class="lead">Put yourself where you&rsquo;re actually sitting.</h1>
+    <div class="seatpad"><div class="seats" id="seats"></div></div>
+    <div class="modes" id="modes"></div>
+  </section>
+
+  <section class="screen" id="play" hidden>
+    <div class="chip" id="chip"><span class="shape circle" id="shape"></span><span id="chipText"></span></div>
+    <div class="hero" id="hero">
+      <div class="big" id="big"></div>
+      <div class="clock" id="clock" hidden></div>
+      <div class="title" id="title"></div>
+      <div class="sub" id="sub"></div>
+    </div>
+    <canvas id="arena"></canvas>
+  </section>
+</div>
+
 <div class="ring" id="ring"></div>
-<div class="scores" id="scores"></div>
-<div class="notice" id="notice"></div>
+<div class="notice" id="notice" role="status" aria-live="polite"></div>
+<div class="fuse" id="fuse" hidden aria-hidden="true"><i id="fuseFill"></i></div>
 
 <script type="module">
 const $ = (id) => document.getElementById(id);
-const app = $("app"), ringEl = $("ring");
+const app = $("app"), ringEl = $("ring"), play = $("play"), hero = $("hero");
+const bigEl = $("big"), clockEl = $("clock"), titleEl = $("title"), subEl = $("sub");
+const chipEl = $("chip"), shapeEl = $("shape"), chipText = $("chipText");
+const seatsEl = $("seats"), modesEl = $("modes"), fuseEl = $("fuse"), fuseFill = $("fuseFill");
 
 // Identity survives a reload or a dropped socket, so a phone that locked comes back as the SAME
 // player instead of a new dead one.
@@ -66,6 +314,7 @@ let ws = null, me = null, S = null, offset = 0, joined = false, name = store.nam
 let ac = null, osc = null, gain = null, lastPong = Date.now(), dropped = false;
 const offsets = [];
 const serverNow = () => Date.now() + offset;
+const clamp01 = (n) => Math.max(0, Math.min(1, n));
 
 // ---- clock sync. Every timed thing on every phone is computed from this, which is why Flash can
 // light up on all of them at the same instant without the server sending a frame. ----
@@ -92,12 +341,13 @@ function tone(level) {
   gain.gain.setTargetAtTime(level > 0 ? 0.04 : 0, ac.currentTime, 0.07);
   if (level > 0) osc.frequency.setTargetAtTime(120 + level * 520, ac.currentTime, 0.12);
 }
-const buzz = (ms) => navigator.vibrate && navigator.vibrate(ms);
+// A garnish on the Androids that have it, never a signal we depend on: iOS Safari cannot vibrate,
+// so every state below is already legible without it.
+const buzz = (ms) => navigator.vibrate?.(ms);
 
-// ---- input ----
+// ---- input --------------------------------------------------------------------
 let down = null;
-$("reset").addEventListener("pointerdown", (e) => e.stopPropagation());
-$("reset").addEventListener("pointerup", (e) => e.stopPropagation());
+for (const t of ["pointerdown", "pointerup"]) $("reset").addEventListener(t, (e) => e.stopPropagation());
 $("reset").onclick = () => {
   ws?.send(JSON.stringify({ t: "reset" }));
   ws?.send(JSON.stringify({ t: "kickGhosts" }));
@@ -105,30 +355,44 @@ $("reset").onclick = () => {
 addEventListener("pointerdown", (e) => { down = { x: e.clientX, y: e.clientY }; });
 addEventListener("pointercancel", () => { down = null; });
 addEventListener("pointerup", (e) => {
-  if (!down || !joined) return;
-  const dx = e.clientX - down.x, dy = e.clientY - down.y, far = Math.hypot(dx, dy) > 38;
-  down = null;
-  if (far) { ws?.send(JSON.stringify({ t: "act", a: "swipe", angle: Math.atan2(dy, dx) })); buzz(18); }
-  else ws?.send(JSON.stringify({ t: "act", a: "tap" }));
+  const start = down; down = null;
+  if (!start || !joined || !S || S.phase !== "live") return;
+  const dx = e.clientX - start.x, dy = e.clientY - start.y;
+  if (Math.hypot(dx, dy) > 38) {
+    const angle = Math.atan2(dy, dx);
+    ws?.send(JSON.stringify({ t: "act", a: "swipe", angle }));
+    streak(angle);                                  // a throw with no acknowledgement reads as a bug
+    buzz(18);
+  } else ws?.send(JSON.stringify({ t: "act", a: "tap" }));
 });
+
+function streak(angle) {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const el = document.createElement("div");
+  el.className = "streak";
+  el.style.setProperty("--tx", `${Math.cos(angle) * innerWidth * 0.8}px`);
+  el.style.setProperty("--ty", `${Math.sin(angle) * innerWidth * 0.8}px`);
+  el.style.rotate = `${angle}rad`;
+  document.body.append(el);
+  el.addEventListener("animationend", () => el.remove());
+}
 
 // ---- connection, with reconnect. iOS freezes sockets on screen lock and often never fires
 // onclose, so silence on the ping/pong is the real signal. ----
 function connect() {
   ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`);
   ws.onopen = () => {
-    dropped = false; lastPong = Date.now();
+    dropped = false; lastPong = Date.now(); $("warn").hidden = true;
     for (let i = 0; i < 5; i++) setTimeout(ping, i * 110);
     if (name) ws.send(JSON.stringify({ t: "join", name, token: TOKEN }));
-    render();
   };
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
     if (m.t === "pong") return onPong(m);
     if (m.t === "hello") { me = m.id; joined = true; return; }
-    if (m.t === "view") { S = m; render(); }
+    if (m.t === "view") S = m;
   };
-  ws.onclose = () => { dropped = true; render(); setTimeout(connect, 700); };
+  ws.onclose = () => { dropped = true; $("warn").hidden = false; setTimeout(connect, 700); };
   ws.onerror = () => ws.close();
 }
 setInterval(() => {
@@ -137,90 +401,304 @@ setInterval(() => {
 }, 3000);
 connect();
 
-function drawRing(ring) {
-  ringEl.innerHTML = "";
-  if (!ring || !ring.length) return;
-  const cx = innerWidth / 2, cy = innerHeight / 2, r = Math.min(cx, cy) * 0.8;
-  for (const p of ring) {
-    const b = document.createElement("b");
-    b.textContent = p.name;
-    b.style.left = `${cx + Math.cos(p.angle) * r}px`;
-    b.style.top = `${cy + Math.sin(p.angle) * r}px`;
-    ringEl.append(b);
+$("j").onclick = () => {
+  audioOn();                                        // iOS only grants audio inside a real gesture
+  name = store.name = ($("n").value || "player").slice(0, 12);
+  ws?.send(JSON.stringify({ t: "join", name, token: TOKEN }));
+};
+$("n").value = name;
+$("n").onkeydown = (e) => { if (e.key === "Enter") $("j").click(); };
+
+// ---- seat picker ----------------------------------------------------------------
+// Drag your own dot to where you are actually sitting. This is the only input in the product
+// that makes the headline claim true, so it gets the whole lobby screen.
+let drag = null, mySeat = null, lastSeatSend = 0;
+const seatEls = new Map();
+
+function myId() { return S?.you?.id ?? me; }
+function seatData() {
+  if (S?.view?.seats) return S.view.seats.map((s) => ({ ...s, you: s.you ?? s.id === myId() }));
+  return (S?.players || []).map((p) => ({ id: p.id, name: p.name, angle: p.seat || 0, you: p.id === myId() }));
+}
+
+function placeSeats() {
+  const list = seatData();
+  const box = seatsEl.clientWidth;
+  if (!box) return;
+  const r = box / 2 - 22, c = box / 2;
+  for (const [id, el] of seatEls) if (!list.some((s) => s.id === id)) { el.remove(); seatEls.delete(id); }
+  for (const s of list) {
+    let el = seatEls.get(s.id);
+    if (!el) {
+      el = document.createElement("div");
+      el.innerHTML = "<s></s><span></span>";
+      seatsEl.append(el);
+      seatEls.set(s.id, el);
+    }
+    const angle = s.you && mySeat != null ? mySeat : s.angle;
+    el.className = `seat${s.you ? " mine" : ""}${s.you && drag ? " held" : ""}`;
+    el.lastChild.textContent = s.you ? "you" : s.name;
+    el.style.left = `${c + Math.cos(angle) * r}px`;
+    el.style.top = `${c + Math.sin(angle) * r}px`;
   }
 }
 
-function render() {
-  document.querySelector(".warn")?.remove();
-  if (dropped) {
-    const w = document.createElement("div");
-    w.className = "warn"; w.textContent = "RECONNECTING";
-    document.body.append(w);
-  }
+// Grabbing anywhere in the circle moves your dot: at arm's length nobody hits a 30px target.
+function seatAngle(e) {
+  const b = seatsEl.getBoundingClientRect();
+  return Math.atan2(e.clientY - (b.top + b.height / 2), e.clientX - (b.left + b.width / 2));
+}
+function pushSeat(force) {
+  const t = Date.now();
+  if (!force && t - lastSeatSend < 60) return;       // live enough to watch, quiet enough to not flood
+  lastSeatSend = t;
+  ws?.send(JSON.stringify({ t: "seat", angle: mySeat }));
+}
+seatsEl.addEventListener("pointerdown", (e) => {
+  e.stopPropagation();                               // must not read as a swipe at a person
+  drag = e.pointerId; seatsEl.setPointerCapture(e.pointerId);
+  mySeat = seatAngle(e); pushSeat(true); placeSeats();
+});
+seatsEl.addEventListener("pointermove", (e) => {
+  if (drag !== e.pointerId) return;
+  mySeat = seatAngle(e); pushSeat(false); placeSeats();
+});
+for (const t of ["pointerup", "pointercancel"]) seatsEl.addEventListener(t, (e) => {
+  if (drag !== e.pointerId) return;
+  e.stopPropagation();
+  drag = null; pushSeat(true); placeSeats();
+});
 
-  if (!S) {
-    app.style.background = "#0a0d14";
-    app.innerHTML = `<div><div class="big" style="font-size:46px">HUDDLE</div>
-      <div class="sub">party games that live across everyone&rsquo;s phones</div>
-      <div style="margin-top:18px"><input id="n" placeholder="your name" maxlength="12" autocomplete="off" value="${name}"></div>
-      <button id="j">Join</button></div>`;
-    $("j").onclick = () => {
-      audioOn();
-      name = store.name = ($("n").value || "player").slice(0, 12);
-      ws?.send(JSON.stringify({ t: "join", name, token: TOKEN }));
-    };
-    $("n").onkeydown = (e) => { if (e.key === "Enter") $("j").click(); };
+let modeSig = "";
+function drawModes() {
+  const enough = (S.players || []).length;
+  const sig = S.modes.map((m) => `${m.key}${m.key === S.mode ? "*" : ""}${m.min <= enough}`).join("|");
+  if (sig === modeSig) return;
+  modeSig = sig;
+  modesEl.innerHTML = S.modes.map((m) => `
+    <button class="ghost${m.key === S.mode ? " on" : ""}" data-k="${m.key}" ${m.min <= enough ? "" : "disabled"}>
+      <span>${m.name}</span><em>${m.min <= enough ? "start" : `${m.min}+`}</em>
+      <small>${m.blurb}</small>
+    </button>`).join("");
+  for (const b of modesEl.children) b.onclick = (e) => {
+    e.stopPropagation();
+    ws.send(JSON.stringify({ t: "start", mode: b.dataset.k }));
+  };
+}
+
+// ---- ring of players, in the gutters ---------------------------------------------
+// Names are placed by projecting the seat angle onto the edge of the screen, not onto a circle
+// sized to the narrow axis — on a tall phone that circle drops names straight onto the hero text.
+let ringSig = "";
+function drawRing(list) {
+  const sig = (list || []).map((p) => `${p.name}@${p.angle.toFixed(2)}`).join("|") + `/${innerWidth}x${innerHeight}`;
+  if (sig === ringSig) return;
+  ringSig = sig;
+  ringEl.innerHTML = "";
+  if (!list?.length) return;
+  const W = innerWidth, H = innerHeight, cx = W / 2, cy = H / 2;
+  const hw = cx - 12, hh = cy - 12;
+  for (const p of list) {
+    const b = document.createElement("b");
+    b.textContent = p.name;
+    ringEl.append(b);
+    const co = Math.cos(p.angle), si = Math.sin(p.angle);
+    const t = Math.min(hw / Math.max(1e-6, Math.abs(co)), hh / Math.max(1e-6, Math.abs(si)));
+    const w = b.offsetWidth / 2 + 8, h = b.offsetHeight / 2 + 4;
+    b.style.left = `${Math.min(W - w, Math.max(w, cx + co * t))}px`;
+    b.style.top = `${Math.min(H - h - 34, Math.max(h + 40, cy + si * t))}px`;
+  }
+}
+
+// ---- arena renderer (Duel) ---------------------------------------------------------
+// Lane 1: this is the shape I built to. Coordinates normalised 0-1 inside your own screen,
+// objects interpolated between broadcasts so a slow network still looks like 60fps.
+// Drag sends {t:'act', a:'move', x, y}; a tap sends {t:'act', a:'fire', angle}.
+const arena = $("arena"), actx = arena.getContext("2d");
+let frames = [null, null];
+function feedArena(v) {
+  const last = frames[1];
+  if (!last || last.at !== (S.now || 0)) frames = [last || { v, at: S.now }, { v, at: S.now || Date.now() }];
+}
+function drawArena() {
+  const cur = frames[1]?.v, prev = frames[0]?.v || cur;
+  if (!cur) return;
+  const dpr = Math.min(devicePixelRatio || 1, 2), W = innerWidth, H = innerHeight;
+  if (arena.width !== W * dpr) { arena.width = W * dpr; arena.height = H * dpr; }
+  actx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  actx.clearRect(0, 0, W, H);
+  const k = clamp01((Date.now() - (frames[1].at || 0)) / 100);
+  const lerp = (a, b) => a + (b - a) * k;
+  if (cur.edge != null) {                            // the side the shot crosses to the next phone
+    const side = String(cur.edge);
+    actx.fillStyle = "#ffffff2e";
+    if (side === "left") actx.fillRect(0, 0, 4, H);
+    else if (side === "right") actx.fillRect(W - 4, 0, 4, H);
+    else if (side === "top") actx.fillRect(0, 0, W, 4);
+    else actx.fillRect(0, H - 4, W, 4);
+  }
+  for (let i = 0; i < (cur.objects || []).length; i++) {
+    const o = cur.objects[i], q = prev.objects?.[i] || o;
+    actx.beginPath();
+    actx.arc(lerp(q.x, o.x) * W, lerp(q.y, o.y) * H, (o.r || 0.03) * W, 0, 7);
+    actx.fillStyle = o.c || "#f4f6fb";
+    actx.fill();
+  }
+  if (cur.you) {
+    actx.beginPath();
+    actx.arc(cur.you.x * W, cur.you.y * H, 0.045 * W, 0, 7);
+    actx.fillStyle = "#ff7a3c"; actx.fill();
+  }
+}
+arena.addEventListener("pointermove", (e) => {
+  if (!down || play.classList.contains("arena-on") === false) return;
+  ws?.send(JSON.stringify({ t: "act", a: "move", x: e.clientX / innerWidth, y: e.clientY / innerHeight }));
+});
+
+// ---- the one place a view turns into pixels -----------------------------------------
+let everAlive = false, wasHolding = false, wasAlive = true, litNow = false;
+let screen = "join";
+
+function show(next) {
+  if (screen === next) return;
+  screen = next;
+  $("join").hidden = next !== "join";
+  $("lobby").hidden = next !== "lobby";
+  play.hidden = next !== "play";
+}
+function text(el, s) { if (el.textContent !== s) el.textContent = s; }
+function fitBig() {
+  const key = `${bigEl.textContent.length}|${innerWidth}|${getComputedStyle(app).getPropertyValue("--gutter")}`;
+  if (fitBig.key === key) return;
+  fitBig.key = key;
+  bigEl.style.fontSize = "";
+  if (!bigEl.textContent) return;
+  const box = hero.clientWidth, w = bigEl.scrollWidth;
+  if (box && w > box) {
+    const base = parseFloat(getComputedStyle(bigEl).fontSize);
+    bigEl.style.fontSize = `${Math.max(24, base * (box / w))}px`;
+  }
+}
+function chip(shape, label) {
+  chipEl.hidden = !label;
+  shapeEl.className = `shape ${shape}`;
+  text(chipText, label || "");
+}
+
+function paint() {
+  requestAnimationFrame(paint);
+  if (!S) return show("join");
+
+  const v = S.view || {};
+  const alive = S.you ? S.you.alive : true;
+  if (alive) everAlive = true;
+  // A phone that joined mid-round is not alive, and every mode renders not-alive as OUT. Being
+  // told you already lost, ten seconds after scanning the QR, is the worst first impression we
+  // could hand a judge. If we have never once been alive, we did not lose — we just got here.
+  const walkUp = !!S.you && !alive && !everAlive && S.phase !== "lobby";
+
+  if (S.phase === "lobby" && !v.seatPicker && !v.lobby) show("play");
+  else if (v.lobby || (S.phase === "lobby" && v.seatPicker)) show("lobby");
+  else show("play");
+
+  $("scores").innerHTML = (S.players || []).map((p) =>
+    `<span class="${p.alive ? "" : "out"}${p.id === myId() ? " me" : ""}">${p.name}${p.score ? ` <i>${p.score}</i>` : ""}</span>`).join("");
+  text($("notice"), S.phase === "live" ? "" : (S.notice || ""));
+
+  if (screen === "lobby") {
+    drawModes();
+    placeSeats();
+    drawRing(null);
+    app.style.background = "var(--idle)";
+    app.style.color = "var(--ink)";
+    app.classList.remove("on-light");
+    fuseEl.hidden = true;
+    tone(0);
     return;
   }
 
-  const v = S.view || {};
-  // Time-derived fields are computed HERE, off the synced clock — never sent pre-rendered.
-  let big = v.big, bg = v.bg, ink = v.ink, title = v.title, sub = v.sub, urgency = 0;
+  // ---- derive. Time-dependent fields are computed HERE, off the synced clock, never sent
+  // pre-rendered: a waiting game produces no state changes and therefore no broadcasts.
+  let big = v.big, title = v.title, sub = v.sub, bg = v.bg, ink = v.ink;
+  let clock = "", urgency = 0, shape = "circle", label = "", pulsing = false, light = false;
+
+  if (v.toneFrom && v.toneTo) urgency = clamp01((serverNow() - v.toneFrom) / (v.toneTo - v.toneFrom));
+
   if (v.countdownTo) {
-    const left = Math.max(0, v.countdownTo - serverNow());
-    big = (left / 1000).toFixed(1);
+    const secs = (Math.max(0, v.countdownTo - serverNow()) / 1000).toFixed(1);
+    // Impostor sends BOTH your secret word and the 60s talk deadline. Letting the clock take the
+    // hero slot meant every phone rendered the same "59.1" and nobody ever saw their word.
+    if (big == null) big = secs; else clock = secs;
   }
-  if (v.toneFrom && v.toneTo) urgency = Math.max(0, Math.min(1, (serverNow() - v.toneFrom) / (v.toneTo - v.toneFrom)));
-  if (v.hot) bg = `rgb(${86 + urgency * 152},${36 - urgency * 26},42)`;
+  if (v.hot) {
+    const mix = (a, b) => Math.round(a + (b - a) * urgency);
+    bg = `rgb(${mix(108, 255)},${mix(38, 74)},${mix(22, 32)})`;
+    shape = "diamond"; label = "you have it"; pulsing = true;
+  }
+  if (v.braced) { bg = "var(--brace)"; ink = "var(--brace-ink)"; shape = "triangle"; label = "braced"; }
   if (v.flashAt) {
     const lit = serverNow() >= v.flashAt;
     big = lit ? v.litBig : v.waitBig;
-    if (lit) { bg = v.litBg; ink = v.litInk; if (!render.lit) { buzz(35); render.lit = true; } }
-    else render.lit = false;
     title = lit ? "" : v.waitTitle;
     sub = lit ? "" : v.waitSub;
+    shape = lit ? "square" : "circle";
+    label = lit ? "now" : "wait";
+    if (lit) { bg = v.litBg || "var(--lit)"; ink = v.litInk || "var(--lit-ink)"; }
+    if (lit && !litNow) buzz(35);
+    litNow = lit;
   }
-  if (v.braced) bg = "#122a1e";
+  if (walkUp) {
+    big = ""; title = "YOU'RE IN NEXT ROUND"; sub = "you arrived mid-round \u2014 you are not out";
+    bg = "var(--idle)"; ink = "var(--ink)"; shape = "circle"; label = "waiting";
+  } else if (!alive) {
+    bg = "var(--out)"; ink = "var(--out-ink)"; shape = "square"; label = "out";
+  }
+  if (S.phase === "over") {
+    bg = "var(--win)"; ink = "var(--win-ink)"; shape = "diamond"; label = "winner";
+    if (alive && everAlive) { big = "YOU WIN"; title = ""; }
+  }
 
-  app.style.background = bg || "#0a0d14";
-  app.style.color = ink || "#f2f5fa";
+  // ---- transitions worth a frame of animation
+  const holding = !!v.hot;
+  if (holding && !wasHolding) { play.classList.remove("punching"); void play.offsetWidth; play.classList.add("punching"); }
+  wasHolding = holding;
+  if (wasAlive && !alive && !walkUp) { app.classList.remove("cutting"); void app.offsetWidth; app.classList.add("cutting"); }
+  wasAlive = alive || walkUp;
+
+  // ---- write
+  const arenaOn = v.kind === "arena";
+  play.classList.toggle("arena-on", arenaOn);
+  if (arenaOn) { feedArena(v); drawArena(); }
+
+  app.style.background = bg || "var(--idle)";
+  app.style.color = ink || "var(--ink)";
+  app.classList.toggle("on-light", !!(v.flashAt && serverNow() >= v.flashAt) || S.phase === "over");
+  app.style.setProperty("--pulse", `${Math.round(720 - urgency * 540)}ms`);
+  app.style.setProperty("--tense", `${(1 + urgency * 6).toFixed(1)}px`);
+
+  chip(shape, label);
+  text(bigEl, big ?? "");
+  bigEl.hidden = !big;
+  clockEl.hidden = !clock;
+  text(clockEl, clock);
+  text(titleEl, title || "");
+  titleEl.hidden = !title;
+  text(subEl, sub || "");
+  subEl.hidden = !sub;
+  hero.classList.toggle("pulsing", pulsing);
+  fitBig();
+
+  const ring = arenaOn ? null : v.ring;
+  app.style.setProperty("--gutter", ring?.length ? "clamp(56px, 17vw, 96px)" : "16px");
+  drawRing(ring);
+
+  fuseEl.hidden = !(v.tone && S.phase === "live");
+  if (!fuseEl.hidden) fuseFill.style.transform = `scaleX(${1 - urgency})`;
   tone(v.tone ? Math.max(0.05, urgency) : 0);
-
-  $("scores").innerHTML = S.players.map((p) =>
-    `<span class="${p.alive ? "" : "out"}">${p.name}${p.score ? ` <i>${p.score}</i>` : ""}</span>`).join("");
-  $("notice").textContent = S.phase === "live" ? "" : (S.notice || "");
-
-  if (v.lobby) {
-    app.innerHTML = `<div><div class="title">${S.modeName}</div><div class="sub">${sub || ""}</div>
-      <div class="modes" id="modes">${S.modes.map((m) =>
-        `<button class="ghost${m.key === S.mode ? " on" : ""}" data-k="${m.key}">${m.name}
-          <small>${m.blurb} &middot; ${m.min}+ players</small></button>`).join("")}</div>
-      <button id="go">Start ${S.modeName}</button></div>`;
-    for (const b of $("modes").children) b.onclick = () => ws.send(JSON.stringify({ t: "start", mode: b.dataset.k }));
-    $("go").onclick = () => ws.send(JSON.stringify({ t: "start", mode: S.mode }));
-    drawRing(null);
-    return;
-  }
-
-  app.innerHTML = `<div class="${v.dim ? "dim" : ""}">
-    ${big != null ? `<div class="big ${v.pulse ? "pulse" : ""}">${big}</div>` : ""}
-    ${title ? `<div class="title">${title}</div>` : ""}
-    ${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
-  drawRing(v.ring);
 }
+requestAnimationFrame(paint);
 
-setInterval(() => { if (S && S.phase === "live") render(); }, 60);
-addEventListener("resize", () => { if (S) render(); });
+addEventListener("resize", () => { fitBig.key = null; ringSig = ""; placeSeats(); });
 addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
   ac?.resume().catch(() => {});
@@ -233,3 +711,5 @@ if ("wakeLock" in navigator) {
   addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") hold(); });
 }
 </script>
+</body>
+</html>
