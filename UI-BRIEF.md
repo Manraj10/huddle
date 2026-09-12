@@ -1,3 +1,11 @@
+> **RESOLVED in 524b8e9 — do not re-fix.** The cause was not overlap: #lobby declared three grid
+> rows for four children, so the fourth landed in an implicit row, and with content overflowing
+> there was no free space left for the 1fr ring track. It collapsed to about 20px while the ring
+> still painted ~300px tall, so everything after it laid out under the collapsed track rather than
+> under the visible circle. The lobby is now four named grid areas and scrollHeight is exactly 812
+> at 375x812. Kept for the record, and because the conditions-of-use section below still applies to
+> any new screen.
+
 # UI brief: the game is unreadable on a phone
 
 Paste this whole file into a fresh session. Fix the layout first. Do not start with colour.
