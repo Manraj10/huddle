@@ -83,6 +83,7 @@ between playtests without a redeploy.
 | `HUDDLE_RELAY_PENALTY_MS` | `2000` | What a pass to the wrong neighbour costs the room |
 | `HUDDLE_CHAIN_EXTEND_MS` | `12000` | How long you get to extend the chain (recall gets half of it, per tap) |
 | `HUDDLE_WIRETAP_MS` | `90000` | How long the room has to find the pair |
+| `HUDDLE_TILT_SPEED` | `900` | How far a fully tilted phone flies its ship, in thousandths of a screen per second |
 
 ```bash
 HUDDLE_FUSE_MAX_MS=14000 HUDDLE_GAP_MS=180 npm start

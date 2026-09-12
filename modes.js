@@ -27,9 +27,10 @@ export const TUNING = {
   RELAY_PENALTY: ms("HUDDLE_RELAY_PENALTY_MS", 2000),
   CHAIN_EXTEND: ms("HUDDLE_CHAIN_EXTEND_MS", 12000),
   WIRETAP: ms("HUDDLE_WIRETAP_MS", 90000),
+  TILT_SPEED: ms("HUDDLE_TILT_SPEED", 900) / 1000,   // screens per second at full tilt
 };
 
-const { FLIGHT, LOCK, BRACE, FUSE_MIN, FUSE_MAX, GAP, RELAY_PENALTY, CHAIN_EXTEND } = TUNING;
+const { FLIGHT, LOCK, BRACE, FUSE_MIN, FUSE_MAX, GAP, RELAY_PENALTY, CHAIN_EXTEND, TILT_SPEED } = TUNING;
 const CHAIN_RECALL = Math.round(CHAIN_EXTEND / 2);   // per tap, not per sequence
 
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -630,7 +631,7 @@ export const MODES = {
       const d = ctx.data;
       d.order = ctx.alive().slice().sort((a, b) => a.seat - b.seat).map((p) => p.id);
       d.ship = {};
-      for (const id of d.order) d.ship[id] = { x: 0.5, y: 0.5, hp: DUEL_HP, nextFire: 0 };
+      for (const id of d.order) d.ship[id] = { x: 0.5, y: 0.5, tx: 0, ty: 0, hp: DUEL_HP, nextFire: 0 };
       d.bullets = [];
       d.nextBullet = 1;
       d.last = ctx.now();
@@ -640,11 +641,22 @@ export const MODES = {
       const d = ctx.data;
       const s = d.ship[p.id];
       if (!s || d.over) return false;
+      // THE STICK, not a position. The phone reports how far it is tilted and the server decides
+      // where that puts the ship — a client that could declare its own position could declare that
+      // it is standing on top of yours, and the whole authority model is the point of this engine.
+      if (msg.a === "tilt") {
+        const tx = Number(msg.x), ty = Number(msg.y);
+        if (!Number.isFinite(tx) || !Number.isFinite(ty)) return false;
+        s.tx = Math.min(1, Math.max(-1, tx));
+        s.ty = Math.min(1, Math.max(-1, ty));
+        return false;                                // continuous: the tick owns the frame
+      }
       if (msg.a === "move") {
         const x = Number(msg.x), y = Number(msg.y);
         if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
         s.x = Math.min(1, Math.max(0, x));
         s.y = Math.min(1, Math.max(0, y));
+        s.tx = 0; s.ty = 0;        // a finger overrides the tilt rather than fighting it
         // Deliberately FALSE. Returning true makes the server broadcast the whole room once per
         // pointermove, and a pointermove arrives 60-120 times a second per finger; six phones
         // dragging is thousands of per-player view() calls a second for frames nobody asked for.
@@ -687,6 +699,14 @@ export const MODES = {
         d.over = true;
         ctx.finishRound(standing[0] || null, standing[0] ? null : { big: "—", title: "nobody left standing" });
         return true;
+      }
+      // Integrate every stick into a position. Ships that are not being tilted have a zero stick
+      // and simply do not move, so this costs nothing for a room playing with fingers.
+      for (const id of d.order) {
+        const sh = d.ship[id];
+        if (!sh || sh.hp <= 0 || (!sh.tx && !sh.ty)) continue;
+        sh.x = Math.min(1, Math.max(0, sh.x + sh.tx * TILT_SPEED * dt));
+        sh.y = Math.min(1, Math.max(0, sh.y + sh.ty * TILT_SPEED * dt));
       }
       const kept = [];
       for (const b of d.bullets) {
@@ -751,6 +771,7 @@ export const MODES = {
       const right = n > 2 ? at(lane + 1) : null;      // with two phones both edges are each other
       return {
         kind: "arena",
+        wantsTilt: true,                            // the phone only powers the sensor when asked
         you: { x: s.x, y: s.y, hp: s.hp },
         objects,
         edge: "both",                               // no ends on a ring

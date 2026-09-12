@@ -570,6 +570,73 @@ test("duel: a continuous input never owns the broadcast", () => {
   assert.equal(r.act(me.name, { a: "fire", dir: 0 }), true, "a shot is discrete and pushes at once");
 });
 
+test("duel: the phone sends the stick and the SERVER decides where the ship is", () => {
+  // The handoff is explicit about this and it is the whole authority model: a client that could
+  // declare its own position could declare that it is standing on top of yours.
+  const r = room(["ALFA", "BRAVO"], { seats: [0, 3] }).play("duel");
+  const d = r.data;
+  const me = r.players.find((p) => p.id === d.order[0]);
+  const ship = d.ship[me.id];
+  const startedAt = { x: ship.x, y: ship.y };
+
+  assert.equal(r.act(me.name, { a: "tilt", x: 1, y: 0 }), false, "a stick never owns the broadcast");
+  assert.deepEqual({ x: ship.x, y: ship.y }, startedAt, "and it moves nothing on its own");
+
+  r.advance(100);
+  r.tick();
+  assert.ok(ship.x > startedAt.x, "the tick integrates it");
+  assert.equal(ship.y, startedAt.y, "and only along the axis that was tilted");
+
+  // Held at full tilt, the ship covers TILT_SPEED of a screen per second.
+  const was = ship.x;
+  r.advance(200);
+  r.tick();
+  assert.ok(Math.abs((ship.x - was) - TUNING.TILT_SPEED * 0.2) < 1e-6, "at the tuned speed");
+});
+
+test("duel: a tilted ship stops at the edge of its own screen", () => {
+  const r = room(["ALFA", "BRAVO"], { seats: [0, 3] }).play("duel");
+  const d = r.data;
+  const me = r.players.find((p) => p.id === d.order[0]);
+  r.act(me.name, { a: "tilt", x: -1, y: -1 });
+  for (let i = 0; i < 60; i++) { r.advance(50); r.tick(); }
+  assert.equal(d.ship[me.id].x, 0, "a ship leaves the screen only as a bullet does");
+  assert.equal(d.ship[me.id].y, 0);
+});
+
+test("duel: a stick outside the unit square is clamped, not trusted", () => {
+  const r = room(["ALFA", "BRAVO"], { seats: [0, 3] }).play("duel");
+  const d = r.data;
+  const me = r.players.find((p) => p.id === d.order[0]);
+  r.act(me.name, { a: "tilt", x: 50, y: -50 });
+  assert.equal(d.ship[me.id].tx, 1);
+  assert.equal(d.ship[me.id].ty, -1);
+  r.act(me.name, { a: "tilt", x: "nonsense", y: 0 });
+  assert.equal(d.ship[me.id].tx, 1, "garbage on the wire changes nothing");
+});
+
+test("duel: a finger overrides the tilt instead of fighting it", () => {
+  // Someone whose phone has no sensor drags. If the last stick kept integrating underneath, the
+  // ship would crawl away from wherever they put it and the fallback would feel broken.
+  const r = room(["ALFA", "BRAVO"], { seats: [0, 3] }).play("duel");
+  const d = r.data;
+  const me = r.players.find((p) => p.id === d.order[0]);
+  r.act(me.name, { a: "tilt", x: 1, y: 1 });
+  r.act(me.name, { a: "move", x: 0.25, y: 0.75 });
+  r.advance(500);
+  r.tick();
+  assert.deepEqual({ x: d.ship[me.id].x, y: d.ship[me.id].y }, { x: 0.25, y: 0.75 });
+});
+
+test("duel: the arena asks the phone for the sensor, and nothing else does", () => {
+  // The client only powers the gyroscope, and only pays for it on the wire, when a view asks.
+  const duel = room(["ALFA", "BRAVO"], { seats: [0, 3] }).play("duel");
+  assert.equal(duel.view("ALFA").wantsTilt, true);
+  const blind = room(["ALFA", "BRAVO"], { seats: [0, 3] }).play("blindside");
+  assert.ok(!blind.view("ALFA").wantsTilt);
+  assert.ok(!blind.view("BRAVO").wantsTilt);
+});
+
 test("duel: an unflown ship cannot win by standing still once its phone has gone", () => {
   const r = room(["ALFA", "BRAVO"], { seats: [0, 3] }).play("duel");
   r.drop("BRAVO");

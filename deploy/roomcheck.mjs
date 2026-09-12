@@ -135,6 +135,18 @@ try {
     await sleep(300);
     is(phones[0].latest?.phase === "live", "duel starts", phones[0].latest?.phase);
 
+    // Tilt goes over the real wire and the SERVER moves the ship. The phone never says where it is.
+    const mine = () => phones[0].latest?.view?.you;
+    const before = mine();
+    is(!!before && phones[0].latest.view.wantsTilt === true,
+      "the arena asks the phone for its sensor", JSON.stringify(before));
+    phones[0].act({ a: "tilt", x: 1, y: 0 });
+    await sleep(400);
+    is(mine() && mine().x > before.x, "a tilt on the wire moves the ship server-side",
+      `${before?.x} -> ${mine()?.x}`);
+    phones[0].act({ a: "tilt", x: 0, y: 0 });
+    await sleep(120);
+
     // Everyone shoots sideways until something is in flight between two phones.
     let sawHidden = 0, sawVisible = 0;
     for (let i = 0; i < 60; i++) {
