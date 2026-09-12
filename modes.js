@@ -5,11 +5,93 @@
 // (`countdownTo`, `flashAt`) and let each phone do the arithmetic against its own synced clock.
 // Sending "23.4" meant the number froze between broadcasts, and it meant Flash never lit up at
 // all, because a waiting game produces no state changes and therefore no broadcasts.
+//
+// Every mode has to survive a phone leaving mid-round. Screens lock, batteries die, and people
+// wander off at an expo; a round that wedges because one socket went away is a round the room
+// watches die. Each `tick` below reconciles its own state against `ctx.alive()` first.
 
-const FLIGHT = 700, LOCK = 420, BRACE = 1500;
+// Every timing that decides how the game feels is an environment variable, so the room can be
+// retuned between playtests without a redeploy. Defaults are what we are shipping with.
+const ms = (key, fallback) => {
+  const v = Number(process.env[key]);
+  return Number.isFinite(v) && v > 0 ? v : fallback;
+};
+
+export const TUNING = {
+  FLIGHT: ms("HUDDLE_FLIGHT_MS", 700),          // blackout while the bomb is between two phones
+  LOCK: ms("HUDDLE_LOCK_MS", 420),              // you cannot throw it the instant you catch it
+  BRACE: ms("HUDDLE_BRACE_MS", 2200),           // how long a brace stays armed
+  FUSE_MIN: ms("HUDDLE_FUSE_MIN_MS", 11000),
+  FUSE_MAX: ms("HUDDLE_FUSE_MAX_MS", 20000),
+  GAP: ms("HUDDLE_GAP_MS", 250),                // flight time across the real gap between phones
+  RELAY_PENALTY: ms("HUDDLE_RELAY_PENALTY_MS", 2000),
+  CHAIN_EXTEND: ms("HUDDLE_CHAIN_EXTEND_MS", 12000),
+  WIRETAP: ms("HUDDLE_WIRETAP_MS", 90000),
+};
+
+const { FLIGHT, LOCK, BRACE, FUSE_MIN, FUSE_MAX, GAP, RELAY_PENALTY, CHAIN_EXTEND } = TUNING;
+const CHAIN_RECALL = Math.round(CHAIN_EXTEND / 2);   // per tap, not per sequence
+
 const rand = (a, b) => a + Math.random() * (b - a);
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+const secs = (n) => `${(n / 1000).toFixed(1)}s`;
 const ringOf = (ctx, me) => ctx.alive().filter((p) => p.id !== me.id).map((p) => ({ name: p.name, angle: p.seat }));
+
+function shuffle(list) {
+  for (let i = list.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [list[i], list[j]] = [list[j], list[i]];
+  }
+  return list;
+}
+
+function ord(n) {
+  const tail = ["th", "st", "nd", "rd"], v = n % 100;
+  return n + (tail[(v - 20) % 10] || tail[v] || tail[0]);
+}
+
+// ---- seat geometry ----------------------------------------------------------
+// Lives here rather than in server.js because it is game rules, not plumbing: a swipe is a
+// direction and a direction is the person sitting there. It is also the only part of the engine
+// that is worth unit testing on its own, and it cannot be if it is trapped inside a live server.
+
+/** Shortest angle between two seats, wrapping correctly across 0/2π. */
+export const apart = (a, b) => Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)));
+
+/** Whoever is sitting closest to `angle`, excluding the person who swiped. */
+export function nearest(list, from, angle) {
+  const others = list.filter((p) => p.id !== from.id);
+  if (!others.length) return null;
+  let best = others[0], bestD = Infinity;
+  for (const p of others) {
+    const d = apart(p.seat, angle);
+    if (d < bestD) { best = p; bestD = d; }
+  }
+  return best;
+}
+
+/** Two people sitting on top of each other make every swipe ambiguous. */
+export const SAME_SEAT = 0.25;
+
+/**
+ * Why a round cannot start yet, or null if it can. Pure, and recomputed on every broadcast —
+ * a stored reason goes stale the instant the last person places their seat, and a lobby telling
+ * four placed players to go and place themselves is how a demo dies.
+ */
+export function seatBlocker(present) {
+  if (present.length < 2) return null;
+  const unplaced = present.filter((p) => !p.placed);
+  if (unplaced.length === present.length) return "everyone: drag your seat to where you are actually sitting";
+  if (unplaced.length) return `waiting on ${unplaced.map((p) => p.name).join(", ")} to place a seat`;
+  for (let i = 0; i < present.length; i++) {
+    for (let j = i + 1; j < present.length; j++) {
+      if (apart(present[i].seat, present[j].seat) < SAME_SEAT) {
+        return `${present[i].name}, ${present[j].name} are in the same place — one of you move`;
+      }
+    }
+  }
+  return null;
+}
 
 export const MODES = {
   // ------------------------------------------------------------------ hidden state
@@ -19,7 +101,7 @@ export const MODES = {
     start(ctx) {
       const d = ctx.data;
       d.holder = pick(ctx.alive()).id;
-      d.fuseAt = ctx.now() + rand(14000, 26000);
+      d.fuseAt = ctx.now() + rand(FUSE_MIN, FUSE_MAX);
       d.startedAt = ctx.now();
       d.lockUntil = ctx.now() + LOCK;
       d.flight = null;
@@ -50,6 +132,10 @@ export const MODES = {
         d.lockUntil = now + LOCK;
         changed = true;
       }
+      if (d.flight && !ctx.alive().some((p) => p.id === d.flight.to)) {
+        const next = pick(ctx.alive());
+        if (next) { d.flight = null; d.holder = next.id; d.lockUntil = now + LOCK; changed = true; }
+      }
       if (d.flight && now >= d.flight.arriveAt) {
         const target = ctx.players().find((p) => p.id === d.flight.to && p.alive);
         d.holder = (target || pick(ctx.alive()) || {}).id ?? null;
@@ -58,8 +144,21 @@ export const MODES = {
       if (now >= d.fuseAt) {
         const id = d.holder ?? d.flight?.to;
         const loser = ctx.players().find((p) => p.id === id);
+        // A brace is a real save, spent the moment it works: you bet on when the fuse ends, and
+        // winning that bet throws the bomb back into the room on a short fuse instead of ending
+        // the round. Bracing used to only change your background colour, which is not a decision.
+        if (loser && d.braced[loser.id] > now) {
+          delete d.braced[loser.id];
+          const next = pick(ctx.alive().filter((p) => p.id !== loser.id)) || loser;
+          d.holder = next.id;
+          d.flight = null;
+          d.lockUntil = now + LOCK;
+          d.startedAt = now;
+          d.fuseAt = now + rand(6000, 10000);
+          ctx.notice(`${loser.name} braced and took the blast — it is loose again, on a short fuse`);
+          return true;
+        }
         d.holder = null; d.flight = null; d.fuseAt = Infinity;
-        // Bracing costs you the round if you were wrong about the timing.
         ctx.eliminate(loser, loser ? `${loser.name} was holding it` : "nobody was holding it");
         return true;
       }
@@ -81,7 +180,7 @@ export const MODES = {
       return {
         ...shared, kind: "text", big: "?", dim: true,
         title: d.flight ? "in the air" : "someone has it",
-        sub: bracedUntil ? "braced" : "tap to brace",
+        sub: bracedUntil ? "braced — it will cost you the bomb, not the round" : "tap to brace",
         braced: bracedUntil > ctx.now(),
       };
     },
@@ -117,6 +216,7 @@ export const MODES = {
       const d = ctx.data;
       if (d.settled) return false;
       const live = ctx.alive();
+      if (!live.length) return false;
       if (!live.every((p) => d.taps[p.id] != null) && now < d.flashAt + 4000) return false;
       d.settled = true;
       const early = live.filter((p) => d.taps[p.id] === -1);
@@ -177,6 +277,12 @@ export const MODES = {
     tick(ctx, now) {
       const d = ctx.data;
       const live = ctx.alive();
+      if (!live.length) return false;
+      // The impostor's phone leaving is the one drop this mode cannot argue its way out of.
+      if (!live.some((p) => p.id === d.impostor)) {
+        ctx.finishRound(null, { big: d.odd, title: "the impostor left the room", sub: `the word was "${d.common}"` });
+        return true;
+      }
       if (!live.every((p) => d.votes[p.id] != null) && now < d.talkUntil) return false;
       const tally = {};
       for (const v of Object.values(d.votes)) tally[v] = (tally[v] || 0) + 1;
@@ -206,4 +312,523 @@ export const MODES = {
       return { kind: "text", title: `the room: ${d.common}`, big: d.odd, sub: `${imp?.name} is lying and doesn't know you know.` };
     },
   },
+
+  // ------------------------------------------------------ co-op: the seating, turned into a game
+  // Every other mode eliminates people, and an eliminated stranger at an expo walks away. Relay
+  // keeps everyone in and gives the room one number to beat, which is what makes people call their
+  // friends over. It is also the mode that proves the seating is real: the token has to travel in
+  // seat order, so a ring that does not match the table is immediately, visibly broken.
+  relay: {
+    name: "Relay", min: 3,
+    blurb: "Co-op. Pass the token all the way round the ring, in seat order, against the room's best time.",
+    start(ctx) {
+      const d = ctx.data;
+      // Direction alternates round to round so the room cannot run on muscle memory. It is kept in
+      // records under an underscore key, which the server strips before anything reaches a phone.
+      const clockwise = !ctx.records._relayClockwise;
+      ctx.setRecord("_relayClockwise", clockwise);
+      const ring = ctx.alive().slice().sort((a, b) => a.seat - b.seat);
+      if (!clockwise) ring.reverse();
+      const from = Math.floor(Math.random() * ring.length);
+      d.order = ring.slice(from).concat(ring.slice(0, from)).map((p) => p.id);
+      d.clockwise = clockwise;
+      d.at = 0;
+      d.passes = 0;
+      d.need = d.order.length;
+      d.penalty = 0;
+      d.startedAt = ctx.now();
+      d.wrong = null;
+      d.done = false;
+      d.settled = false;
+    },
+    act(ctx, p, msg) {
+      const d = ctx.data;
+      if (msg.a !== "swipe" || d.done) return false;
+      if (p.id !== d.order[d.at]) return false;                      // not your turn
+      const want = ctx.players().find((q) => q.id === d.order[(d.at + 1) % d.order.length]);
+      const got = ctx.towards(p, msg.angle);
+      if (!want || !got) return false;
+      if (got.id !== want.id) {
+        d.penalty += RELAY_PENALTY;
+        d.wrong = { by: p.id, byName: p.name, to: got.name, at: ctx.now() };
+        return true;
+      }
+      d.at = (d.at + 1) % d.order.length;
+      d.passes++;
+      d.wrong = null;
+      if (d.passes >= d.need) { d.done = true; d.finishedAt = ctx.now(); }
+      return true;
+    },
+    tick(ctx, now) {
+      const d = ctx.data;
+      if (d.done) {
+        if (d.settled) return false;
+        d.settled = true;
+        const total = d.finishedAt - d.startedAt + d.penalty;
+        const best = ctx.records.relay;
+        const record = best == null || total < best;
+        if (record) ctx.setRecord("relay", total);
+        d.total = total;
+        ctx.finishRound(null, {
+          big: secs(total),
+          title: record ? "NEW ROOM RECORD" : `the room's lap · best ${secs(best)}`,
+          sub: d.penalty ? `${secs(d.penalty)} of that was wrong passes` : "clean lap, no penalties",
+        });
+        return true;
+      }
+      // A phone leaving must not strand the token halfway round the ring. Drop them out of the
+      // order and keep going rather than starting the lap again — the room is already running.
+      const live = new Set(ctx.alive().map((q) => q.id));
+      if (d.order.some((id) => !live.has(id))) {
+        const wanted = d.order[d.at];
+        const kept = d.order.filter((id) => live.has(id));
+        if (kept.length < 2) {
+          d.done = true; d.settled = true;
+          ctx.finishRound(null, { big: "—", title: "lap abandoned", sub: "not enough phones left to pass to" });
+          return true;
+        }
+        let at = kept.indexOf(wanted);
+        if (at < 0) {                                   // the holder is the one who left
+          at = 0;
+          for (let k = 1; k < d.order.length; k++) {
+            const i = kept.indexOf(d.order[(d.at + k) % d.order.length]);
+            if (i >= 0) { at = i; break; }
+          }
+        }
+        d.order = kept;
+        d.at = at;
+        d.need = kept.length;
+        ctx.notice("a phone dropped — the lap carries on");
+        if (d.passes >= d.need) { d.done = true; d.finishedAt = now; }
+        return true;
+      }
+      if (d.wrong && now - d.wrong.at > 1800) { d.wrong = null; return true; }
+      return false;
+    },
+    view(ctx, p) {
+      const d = ctx.data;
+      const holderId = d.order[d.at];
+      if (holderId === p.id) {
+        const next = ctx.players().find((q) => q.id === d.order[(d.at + 1) % d.order.length]);
+        return {
+          kind: "text", big: "GO", bg: "#0d3320", ink: "#e9fff2", pulse: true,
+          title: next ? `PASS TO ${next.name}` : "PASS IT",
+          sub: d.wrong?.by === p.id ? `not ${d.wrong.to} — +${secs(RELAY_PENALTY)}` : "swipe toward them",
+          ring: next ? [{ name: next.name, angle: next.seat }] : [],
+        };
+      }
+      const holder = ctx.players().find((q) => q.id === holderId);
+      return {
+        kind: "text", big: `${d.passes}/${d.need}`, dim: true, title: "round the ring",
+        sub: d.wrong
+          ? `${d.wrong.byName} passed to ${d.wrong.to} — +${secs(RELAY_PENALTY)}`
+          : `${holder?.name ?? "—"} has it${d.penalty ? ` · +${secs(d.penalty)}` : ""}`,
+      };
+    },
+    spectate(ctx) {
+      const d = ctx.data;
+      const name = (id) => ctx.players().find((q) => q.id === id)?.name ?? "—";
+      const best = ctx.records.relay;
+      return {
+        kind: "text", big: `${d.passes}/${d.need}`, countupFrom: d.startedAt,
+        title: d.order.map(name).join(" → "),
+        sub: [
+          `${name(d.order[d.at])} has it`,
+          d.penalty ? `+${secs(d.penalty)} penalties` : null,
+          best == null ? "no record yet" : `record ${secs(best)}`,
+        ].filter(Boolean).join("   ·   "),
+        map: { holder: d.order[d.at], players: ctx.alive().map((q) => ({ id: q.id, name: q.name, angle: q.seat })) },
+      };
+    },
+  },
+
+  // --------------------------------------------- per-player truth, as a game you can explain fast
+  // The same room state renders as a secret for one person and a bare number for everyone else.
+  // Nobody is ever shown the sequence except the person extending it; you learn your own place in
+  // it because someone swiped at you, and you learn everyone else's by watching the room. The
+  // progress counter is deliberately absent from the recall view — if phones showed the position,
+  // knowing your own number would make the game trivial and nobody would look up.
+  chain: {
+    name: "Chain", min: 3,
+    blurb: "A growing order of people. Only the extender sees it. Then the room taps it back from memory.",
+    start(ctx) {
+      const d = ctx.data;
+      d.ring = ctx.alive().slice().sort((a, b) => a.seat - b.seat).map((p) => p.id);
+      d.turn = Math.floor(Math.random() * d.ring.length);
+      d.seq = [];
+      d.phase = "extend";
+      d.at = 0;
+      d.failed = null;
+      d.deadline = ctx.now() + CHAIN_EXTEND;
+    },
+    act(ctx, p, msg) {
+      const d = ctx.data;
+      if (d.phase === "extend") {
+        if (msg.a !== "swipe" || p.id !== d.ring[d.turn]) return false;
+        const target = ctx.towards(p, msg.angle);
+        if (!target) return false;
+        chainExtend(ctx, d, target.id);
+        return true;
+      }
+      if (d.phase !== "recall" || msg.a !== "tap") return false;
+      if (p.id !== d.seq[d.at]) {
+        d.phase = "fail";
+        d.failed = p.id;
+        d.deadline = ctx.now() + 1600;                 // a beat so the room sees what broke it
+        return true;
+      }
+      d.at++;
+      d.deadline = ctx.now() + CHAIN_RECALL;
+      if (d.at >= d.seq.length) {
+        d.phase = "extend";
+        d.turn = (d.turn + 1) % d.ring.length;
+        d.deadline = ctx.now() + CHAIN_EXTEND;
+        ctx.notice(`the room remembered ${d.seq.length}`);
+      }
+      return true;
+    },
+    tick(ctx, now) {
+      const d = ctx.data;
+      // A phone leaving must not put an innocent player out. Rebuild the chain without them and
+      // restart the recall, rather than eliminating whoever happened to be next in a dead order.
+      const live = new Set(ctx.alive().map((q) => q.id));
+      if (d.ring.some((id) => !live.has(id)) || d.seq.some((id) => !live.has(id))) {
+        const extender = d.ring[d.turn];
+        d.ring = d.ring.filter((id) => live.has(id));
+        if (d.ring.length < 2) return false;           // the engine ends or resets the round
+        const kept = d.ring.indexOf(extender);
+        d.turn = kept >= 0 ? kept : d.turn % d.ring.length;
+        d.seq = d.seq.filter((id) => live.has(id));
+        d.at = 0;
+        d.failed = null;
+        d.phase = d.seq.length ? "recall" : "extend";
+        d.deadline = now + (d.phase === "extend" ? CHAIN_EXTEND : CHAIN_RECALL);
+        ctx.notice(`a phone dropped — the chain is ${d.seq.length} again`);
+        return true;
+      }
+      if (now < d.deadline) return false;
+      if (d.phase === "fail") {
+        const who = ctx.players().find((q) => q.id === d.failed);
+        ctx.eliminate(who, who ? `${who.name} tapped out of turn` : "the chain broke");
+        return true;
+      }
+      if (d.phase === "extend") {
+        const who = ctx.players().find((q) => q.id === d.ring[d.turn]);
+        const target = pick(ctx.alive());
+        if (!target) return false;
+        ctx.notice(`${who?.name ?? "nobody"} ran out of time — the chain chose for them`);
+        chainExtend(ctx, d, target.id);
+        return true;
+      }
+      const stuck = ctx.players().find((q) => q.id === d.seq[d.at]);
+      ctx.eliminate(stuck, stuck ? `${stuck.name} froze` : "the chain broke");
+      return true;
+    },
+    view(ctx, p) {
+      const d = ctx.data;
+      if (!p.alive) return { kind: "text", title: "OUT", sub: `${ctx.alive().length} still in` };
+      const name = (id) => ctx.players().find((q) => q.id === id)?.name ?? "—";
+      // You are told the places you were swiped into and nothing else. Your own number is useless
+      // unless you can count the taps happening around the table, which is the whole game.
+      const mine = d.seq.map((id, i) => (id === p.id ? i + 1 : 0)).filter(Boolean);
+      const yours = mine.length ? `you are ${mine.map(ord).join(" and ")}` : "you are not in the chain yet";
+      if (d.phase === "fail") {
+        return { kind: "text", big: "BROKEN", bg: "#3a1016", title: `${name(d.failed)} tapped out of turn` };
+      }
+      if (d.phase === "extend") {
+        if (p.id === d.ring[d.turn]) {
+          return {
+            kind: "text", big: String(d.seq.length), title: "ADD SOMEONE", pulse: true,
+            sub: d.seq.length ? d.seq.map(name).join(" → ") : "swipe at anyone to start the chain",
+            countdownTo: d.deadline, ring: ringOf(ctx, p),
+          };
+        }
+        return {
+          kind: "text", big: String(d.seq.length), dim: true,
+          title: `${name(d.ring[d.turn])} is extending it`, sub: yours,
+        };
+      }
+      return {
+        kind: "text", big: String(d.seq.length), title: "TAP IN ORDER",
+        sub: `${yours} · watch the room, not your phone`, countdownTo: d.deadline,
+      };
+    },
+    spectate(ctx) {
+      const d = ctx.data;
+      const name = (id) => ctx.players().find((q) => q.id === id)?.name ?? "—";
+      const drawn = d.seq.map((id, i) => (d.phase === "recall" && i < d.at ? `[${name(id)}]` : name(id)));
+      return {
+        kind: "text", big: String(d.seq.length),
+        title: drawn.join(" → ") || "empty chain",
+        sub: d.phase === "extend"
+          ? `${name(d.ring[d.turn])} is adding someone — only they can see this`
+          : "the room is tapping it from memory. you can see it. they cannot.",
+        map: { players: ctx.alive().map((q) => ({ id: q.id, name: q.name, angle: q.seat })) },
+      };
+    },
+  },
+
+  // ---------------------------------------------------------------- hidden pairs, in a loud room
+  // Everyone gets a word and exactly two people share one. The decoys must all be DISTINCT: with
+  // a single shared decoy, two strangers holding it read as the hidden pair to each other and the
+  // round resolves on a lie the engine told. The pair are never informed that they are the pair —
+  // their view is the same object as everyone else's with a different word in it.
+  wiretap: {
+    name: "Wiretap", min: 4,
+    blurb: "Everyone gets a word. Two of you share one. Find your twin before the room finds you.",
+    start(ctx) {
+      const d = ctx.data;
+      const live = ctx.alive();
+      const words = shuffle(WIRETAP_WORDS.slice());
+      const order = shuffle(live.slice());
+      d.shared = words.pop();
+      d.word = {};
+      for (const p of order) d.word[p.id] = words.pop();
+      d.pair = [order[0].id, order[1].id];
+      d.word[d.pair[0]] = d.shared;
+      d.word[d.pair[1]] = d.shared;
+      d.picks = {};
+      d.endAt = ctx.now() + TUNING.WIRETAP;
+      d.over = false;
+    },
+    act(ctx, p, msg) {
+      const d = ctx.data;
+      if (msg.a !== "swipe" || d.over || d.picks[p.id] != null) return false;
+      const target = ctx.towards(p, msg.angle);
+      if (!target) return false;
+      d.picks[p.id] = target.id;                       // one accusation each, and it is final
+      const inPair = (id) => d.pair.includes(id);
+      if (inPair(p.id) && inPair(target.id) && d.picks[target.id] === p.id) return wiretapEnd(ctx, d, "pair");
+      if (!inPair(p.id) && inPair(target.id)) {
+        d.caughtBy = p.id;
+        d.caught = target.id;
+        return wiretapEnd(ctx, d, "room");
+      }
+      return true;
+    },
+    tick(ctx, now) {
+      const d = ctx.data;
+      if (d.over) return false;
+      // Half a pair walking off leaves a round that can never resolve, so end it and reveal.
+      const live = new Set(ctx.alive().map((q) => q.id));
+      if (!d.pair.every((id) => live.has(id))) return wiretapEnd(ctx, d, "gone");
+      if (now < d.endAt) return false;
+      return wiretapEnd(ctx, d, "timeout");
+    },
+    view(ctx, p) {
+      const d = ctx.data;
+      if (!p.alive) return { kind: "text", title: "OUT", sub: `${ctx.alive().length} still in` };
+      // Chrome and copy are identical for all eight players. The only thing that differs is the
+      // word, which is the point — anything else here and the pair are obvious over someone's
+      // shoulder.
+      const picked = d.picks[p.id] != null;
+      return {
+        kind: "text", big: d.word[p.id] ?? "—",
+        title: picked ? "locked in" : "say your word out loud",
+        sub: picked ? "waiting on the room" : "swipe at whoever you think shares it",
+        countdownTo: picked ? null : d.endAt,
+        ring: picked ? [] : ringOf(ctx, p),
+      };
+    },
+    spectate(ctx) {
+      const d = ctx.data;
+      const name = (id) => ctx.players().find((q) => q.id === id)?.name ?? "—";
+      return {
+        kind: "text", big: d.shared, countdownTo: d.endAt,
+        title: `${name(d.pair[0])} + ${name(d.pair[1])}`,
+        sub: "they share it and neither of them knows it yet",
+        map: { players: ctx.alive().map((q) => ({ id: q.id, name: q.name, angle: q.seat })) },
+      };
+    },
+  },
+
+  // ------------------------------------------------------------- the gap between phones as cover
+  // Phones lie in a row in seat order. Each player has a ship on their own screen; a bullet
+  // leaving your right edge enters your neighbour's left edge at the same height and speed. While
+  // it crosses the real physical gap between the two phones it has an `arriveAt` and is filtered
+  // out of EVERY view, so it exists on the server and on nobody's screen. Say DUAL out loud when
+  // you demo this: Seabaa shipped the two-device version over Bluetooth in 2014. Ours is N
+  // players, no install, and the gap is cover rather than a timing detail.
+  duel: {
+    name: "Duel", min: 2,
+    blurb: "Ships on every phone. Bullets cross the gaps between them, and the gaps are blind.",
+    start(ctx) {
+      const d = ctx.data;
+      d.order = ctx.alive().slice().sort((a, b) => a.seat - b.seat).map((p) => p.id);
+      d.ship = {};
+      for (const id of d.order) d.ship[id] = { x: 0.5, y: 0.5, hp: DUEL_HP, nextFire: 0 };
+      d.bullets = [];
+      d.nextBullet = 1;
+      d.last = ctx.now();
+      d.over = false;
+    },
+    act(ctx, p, msg) {
+      const d = ctx.data;
+      const s = d.ship[p.id];
+      if (!s || d.over) return false;
+      if (msg.a === "move") {
+        const x = Number(msg.x), y = Number(msg.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+        s.x = Math.min(1, Math.max(0, x));
+        s.y = Math.min(1, Math.max(0, y));
+        return true;
+      }
+      if (msg.a !== "fire") return false;
+      const now = ctx.now();
+      if (now < s.nextFire) return false;
+      const lane = d.order.indexOf(p.id);
+      const dir = Number.isFinite(Number(msg.dir)) ? Number(msg.dir) : 0;
+      let vx = Math.cos(dir), vy = Math.sin(dir);
+      // The two ends of the row have no neighbour on their outside, so their shots are turned
+      // inward instead of thrown off the table. With two phones this is just "you two, at each
+      // other", which is the demo.
+      const first = lane === 0, last = lane === d.order.length - 1;
+      if (first && vx < 0) vx = -vx;
+      if (last && !first && vx > 0) vx = -vx;
+      const inward = first ? 1 : last ? -1 : Math.sign(vx) || 1;
+      if (Math.abs(vx) < DUEL_MIN_VX) vx = inward * DUEL_MIN_VX;   // a shot that never leaves your
+      const len = Math.hypot(vx, vy) || 1;                          // screen is not this game
+      s.nextFire = now + DUEL_COOL;
+      d.bullets.push({
+        id: d.nextBullet++, owner: p.id, lane,
+        x: s.x + (vx / len) * 0.08, y: s.y + (vy / len) * 0.08,
+        vx: (vx / len) * DUEL_SPEED, vy: (vy / len) * DUEL_SPEED,
+        arriveAt: 0,
+      });
+      return true;
+    },
+    tick(ctx, now) {
+      const d = ctx.data;
+      if (d.over) return false;
+      const dt = Math.min(0.2, Math.max(0, (now - d.last) / 1000));
+      d.last = now;
+      // A ship whose phone has gone must not win by standing still. ctx.alive() already excludes
+      // anyone whose socket is away, which is exactly the presence check this needs.
+      const standing = ctx.alive().filter((q) => d.ship[q.id] && d.ship[q.id].hp > 0);
+      if (standing.length <= 1) {
+        d.over = true;
+        ctx.finishRound(standing[0] || null, standing[0] ? null : { big: "—", title: "nobody left standing" });
+        return true;
+      }
+      const kept = [];
+      for (const b of d.bullets) {
+        if (b.arriveAt) {
+          if (now < b.arriveAt) { kept.push(b); continue; }        // still in the gap: invisible
+          b.arriveAt = 0;
+          b.x = b.vx > 0 ? 0 : 1;
+        }
+        b.x += b.vx * dt;
+        b.y += b.vy * dt;
+        if (b.y < 0) { b.y = -b.y; b.vy = -b.vy; }
+        if (b.y > 1) { b.y = 2 - b.y; b.vy = -b.vy; }
+        if (b.x > 1 || b.x < 0) {
+          const next = b.lane + (b.x > 1 ? 1 : -1);
+          if (next < 0 || next >= d.order.length) continue;        // off the end of the row
+          b.lane = next;
+          b.arriveAt = now + GAP;
+          kept.push(b);
+          continue;
+        }
+        const occupant = d.order[b.lane];
+        const target = occupant != null && occupant !== b.owner
+          ? ctx.alive().find((q) => q.id === occupant) : null;
+        const s = target ? d.ship[occupant] : null;
+        if (s && s.hp > 0 && Math.hypot(b.x - s.x, b.y - s.y) < DUEL_HIT) {
+          s.hp--;
+          if (s.hp <= 0) {
+            const shooter = ctx.players().find((q) => q.id === b.owner);
+            ctx.eliminate(target, `${shooter?.name ?? "someone"} got ${target.name} across ${Math.abs(b.lane - d.order.indexOf(b.owner))} phone${Math.abs(b.lane - d.order.indexOf(b.owner)) === 1 ? "" : "s"}`);
+            d.bullets = kept;
+            return true;
+          }
+          continue;                                                // the bullet is spent
+        }
+        kept.push(b);
+      }
+      d.bullets = kept;
+      return true;             // an arena needs a frame every tick, unlike every other mode here
+    },
+    view(ctx, p) {
+      const d = ctx.data;
+      const lane = d.order.indexOf(p.id);
+      const s = d.ship[p.id];
+      if (!p.alive || lane < 0 || !s || s.hp <= 0) {
+        return { kind: "text", title: "OUT", sub: `${ctx.alive().length} still in` };
+      }
+      const objects = [];
+      for (const b of d.bullets) {
+        if (b.arriveAt) continue;                    // between two phones: on nobody's screen
+        if (b.lane !== lane) continue;               // on someone else's phone
+        objects.push({ x: b.x, y: b.y, r: 0.02, c: b.owner === p.id ? "#8ef0b0" : "#ff6b5a", kind: "bullet" });
+      }
+      const left = lane > 0 ? ctx.players().find((q) => q.id === d.order[lane - 1]) : null;
+      const right = lane < d.order.length - 1 ? ctx.players().find((q) => q.id === d.order[lane + 1]) : null;
+      return {
+        kind: "arena",
+        you: { x: s.x, y: s.y, hp: s.hp },
+        objects,
+        edge: !left ? "right" : !right ? "left" : "both",
+        title: `${"|".repeat(s.hp)} ${s.hp} left`,
+        sub: [left && `${left.name} ←`, right && `→ ${right.name}`].filter(Boolean).join("    "),
+      };
+    },
+    spectate(ctx) {
+      const d = ctx.data;
+      const name = (id) => ctx.players().find((q) => q.id === id)?.name ?? "—";
+      const inGap = d.bullets.filter((b) => b.arriveAt).length;
+      return {
+        kind: "text", big: String(d.bullets.length),
+        title: d.order.map((id) => `${name(id)} ${"|".repeat(Math.max(0, d.ship[id]?.hp ?? 0))}`).join("   "),
+        sub: inGap
+          ? `${inGap} in the gaps between phones — on nobody's screen but this one`
+          : "the whole row, gaps included",
+        map: { players: ctx.alive().map((q) => ({ id: q.id, name: q.name, angle: q.seat })) },
+      };
+    },
+  },
 };
+
+// ---- mode helpers -----------------------------------------------------------
+
+function chainExtend(ctx, d, id) {
+  d.seq.push(id);
+  d.phase = "recall";
+  d.at = 0;
+  d.failed = null;
+  d.deadline = ctx.now() + CHAIN_RECALL;
+}
+
+function wiretapEnd(ctx, d, how) {
+  d.over = true;
+  d.how = how;
+  const name = (id) => ctx.players().find((q) => q.id === id)?.name ?? "—";
+  const [a, b] = d.pair;
+  const reveal = `${name(a)} + ${name(b)}`;
+  if (how === "pair") {
+    for (const id of d.pair) ctx.award(ctx.players().find((q) => q.id === id), 2);
+    ctx.finishRound(null, { big: d.shared, title: reveal, sub: "they found each other and the room never knew" });
+  } else if (how === "room") {
+    for (const p of ctx.alive()) if (!d.pair.includes(p.id)) ctx.award(p, 1);
+    ctx.finishRound(null, { big: d.shared, title: reveal, sub: `${name(d.caughtBy)} pulled ${name(d.caught)} out of the room` });
+  } else if (how === "gone") {
+    ctx.finishRound(null, { big: d.shared, title: reveal, sub: "half the pair left before anyone found them" });
+  } else {
+    ctx.finishRound(null, { big: d.shared, title: reveal, sub: "ninety seconds and nobody found anybody" });
+  }
+  return true;
+}
+
+const DUEL_HP = 3;
+const DUEL_SPEED = 0.85;        // screens per second
+const DUEL_HIT = 0.055;
+const DUEL_COOL = 320;
+const DUEL_MIN_VX = 0.4;
+
+// Concrete and sayable out loud, which is the only requirement: the whole game is people saying
+// their word across a table and listening for an echo.
+const WIRETAP_WORDS = [
+  "ANCHOR", "BALLOON", "CACTUS", "DENTIST", "ENGINE", "FERRY", "GLACIER", "HAMMER",
+  "IGLOO", "JUKEBOX", "KETTLE", "LADDER", "MAGNET", "NOODLE", "OSTRICH", "PIANO",
+  "QUARRY", "RADISH", "SADDLE", "TRACTOR", "UMBRELLA", "VIOLIN", "WALNUT", "YOGHURT",
+  "ZEBRA", "BUCKET", "COMPASS", "DOMINO", "ELEVATOR", "FOSSIL", "GARLIC", "HARBOUR",
+];
