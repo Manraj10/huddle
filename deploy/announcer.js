@@ -78,16 +78,25 @@ async function ask(prompt) {
           ...(process.env.HUDDLE_LLM_KEY ? { authorization: `Bearer ${process.env.HUDDLE_LLM_KEY}` } : {}),
         },
         body: JSON.stringify({
-          model: process.env.HUDDLE_LLM_MODEL || "IFM/K2-Horizon-0.9B",
-          max_tokens: 60,
-          temperature: 1,
-          messages: [{ role: "system", content: SYSTEM }, { role: "user", content: prompt }],
+          model: process.env.HUDDLE_LLM_MODEL || "IFM/K2-Horizon-375B-A23B",
+          // K2 is a reasoning model and it thinks INTO content — reasoning_effort and
+          // enable_thinking are both ignored, and a small cap just truncates it mid-thought and
+          // ships its monologue to the announcer. So give it room, fence the answer, and cut.
+          max_tokens: Number(process.env.HUDDLE_LLM_MAX_TOKENS) || 900,
+          temperature: 0.9,
+          messages: [
+            { role: "system", content: `${SYSTEM} Think briefly, then output the final line wrapped in <line></line> tags.` },
+            { role: "user", content: prompt },
+          ],
         }),
       });
       if (!r.ok) return null;
       const j = await r.json();
-      // K2 returns its thinking in reasoning_content and the line itself in content.
-      return j?.choices?.[0]?.message?.content ?? null;
+      const raw = j?.choices?.[0]?.message?.content ?? "";
+      const fenced = raw.match(/<line>([\s\S]*?)<\/line>/);
+      if (fenced) return fenced[1];
+      // No tag means it ran out of room mid-thought. Speaking that is worse than silence.
+      return /<line>/.test(raw) ? null : raw;
     }
     if (process.env.GEMINI_API_KEY) {
       const model = process.env.HUDDLE_GEMINI_MODEL || "gemini-2.5-flash";
