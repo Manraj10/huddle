@@ -177,6 +177,73 @@ try {
   for (const t of twins) t.die();
   await sleep(250);
 
+  console.log("standoff: pointing at a human, and the name that is never sent");
+  {
+    phones[0].send({ t: "start", mode: "standoff" });
+    const live = await until(phones[0], (m) => m.phase === "live" && m.mode === "standoff", "standoff starts", 4000);
+    is(!!live, "standoff starts", phones[0].latest?.phase);
+
+    // Everyone points straight across the table at the person opposite them.
+    const OPPOSITE = { 0: 2, 1: 3, 2: 0, 3: 1 };
+    for (let i = 0; i < 4; i++) phones[i].act({ a: "aim", angle: ANGLES[OPPOSITE[i]] });
+    await sleep(250);
+
+    const named = phones.map((ph) => ph.latest?.view?.big);
+    is(named.every((nm) => typeof nm === "string" && nm !== "—"),
+      "every phone is told the NAME of the person it is pointing at", JSON.stringify(named));
+    // ANGLES is [0, pi/2, pi, -pi/2]; each phone aimed at the seat opposite its own.
+    const want = [2, 3, 0, 1].map((i) => phones[i].name);
+    is(JSON.stringify(named) === JSON.stringify(want),
+      "and it is the person actually sitting at that angle", `${JSON.stringify(named)} vs ${JSON.stringify(want)}`);
+
+    const holder = phones.find((ph) => ph.latest?.view?.title === "YOU HAVE IT");
+    is(!!holder, "exactly one phone is told it has the bomb",
+      JSON.stringify(phones.map((ph) => ph.latest?.view?.title)));
+
+    if (holder) {
+      // The person the holder is pointing at is told they are marked — and is NOT told by whom.
+      const victim = phones.find((ph) => ph.latest?.view?.marked === true);
+      is(!!victim, "somebody is told they are in the crosshairs",
+        JSON.stringify(phones.map((ph) => ph.latest?.view?.marked)));
+      if (victim) {
+        const wire = JSON.stringify({ ...victim.latest.view, ring: undefined, big: undefined });
+        is(!wire.includes(holder.name),
+          "and their phone never says who it is", `leaked ${holder.name}`);
+        is(victim.latest.view.countdownTo === undefined,
+          "nor how long the fuse has left", String(victim.latest.view.countdownTo));
+      }
+
+      // THE BLOCK. The holder throws; the target turns and faces them inside the flight time.
+      const hi = phones.indexOf(holder);
+      const target = phones[OPPOSITE[hi]];
+      // You cannot throw the instant you catch it. The view says when you can, so wait for that
+      // rather than for a guessed number of milliseconds — a tap sent early is silently refused
+      // and every assertion after it passes for the wrong reason.
+      const armed = await until(holder, (m) => m.view?.throwable === true, "the throw arms", 4000);
+      is(!!armed, "the holder is armed to throw once the catch-lock expires",
+        String(holder.latest?.view?.throwable));
+      holder.act({ a: "tap" });
+      const inFlight = await until(target, (m) => m.view?.title === "INCOMING", "it is in the air", 2000);
+      is(!!inFlight, "the target's phone says INCOMING", String(target.latest?.view?.title));
+      is(!JSON.stringify({ ...target.latest.view, ring: undefined, big: undefined }).includes(holder.name),
+        "and still will not say who threw it", "leaked the thrower");
+
+      // Turn and face the thrower inside the flight window. The block is judged at the last
+      // millisecond, so this is real reaction time rather than a formality.
+      target.act({ a: "aim", angle: ANGLES[hi] });
+      const back = await until(holder, (m) => m.view?.title === "YOU HAVE IT", "it comes back", 4000);
+      is(!!back, "facing the throw sends it straight back to the thrower",
+        `holder view: ${holder.latest?.view?.title}`);
+      is(/looked straight at it/.test(holder.latest?.notice || ""),
+        "and the room is told why", JSON.stringify(holder.latest?.notice));
+    }
+
+    phones[0].send({ t: "reset" });
+    await sleep(250);
+    for (let i = 0; i < 4; i++) phones[i].seat(ANGLES[i]);
+    await sleep(200);
+  }
+
   console.log("a bullet nobody can see");
   // The claim is that while a shot crosses the real gap between two handsets it is on the server
   // and on NO phone. Measured, not asserted: the server unions the object ids it actually put on

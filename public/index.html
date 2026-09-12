@@ -367,7 +367,7 @@ const buzz = (ms) => navigator.vibrate?.(ms);
 //
 // The client sends the STICK, never a position. The server integrates it. A phone that could
 // declare where its ship is could declare that it is standing on top of yours.
-let tilt = null, tiltWhy = null, tiltSent = 0, seatYaw = null;
+let tilt = null, tiltWhy = null, tiltSent = 0, seatYaw = null, aimSent = 0, aimLast = null;
 
 /** Who this angle would actually reach, using the same arithmetic the server will use. */
 function whoIsAt(angle) {
@@ -404,6 +404,30 @@ function tiltPipe(x, y) {
   ws.send(JSON.stringify({ t: "act", a: "tilt", x, y }));
 }
 
+// Pointing the phone AT somebody. The top edge of the phone is the barrel, and the top edge is
+// screen angle -pi/2 because screen y runs downward — so the direction the phone is physically
+// pointing is that constant, carried into the frame the player was seated in.
+//
+// The client sends the ANGLE and nothing else. Never a name, never an id. The server decides who
+// is sitting there, which is both hard rule 2 and the entire claim: your input targets a human
+// being at the angle they are actually sitting, and the phone is not trusted to say who that is.
+const POINTING = -Math.PI / 2;
+
+function aimPipe() {
+  if (!joined || !ws || ws.readyState !== 1) return;
+  if (!S || S.phase !== "live" || !S.you?.alive || !S.view?.wantsAim) return;
+  const yaw = tilt?.yaw();
+  if (yaw == null || seatYaw == null) return;         // no sensor: the swipe carries the aim instead
+  const angle = aimAngle(POINTING, yaw, seatYaw);
+  const t = Date.now();
+  if (t - aimSent < 50) return;                       // 20Hz is plenty for a body turning
+  // A phone lying still on a table should put nothing on the wire at all.
+  if (aimLast != null && Math.abs(Math.atan2(Math.sin(angle - aimLast), Math.cos(angle - aimLast))) < 0.02) return;
+  aimSent = t;
+  aimLast = angle;
+  ws.send(JSON.stringify({ t: "act", a: "aim", angle }));
+}
+
 /**
  * iOS grants orientation only inside a real user gesture, so this runs in the Join handler
  * alongside the AudioContext. Everything it can return is a playable state — the drag fallback is
@@ -415,7 +439,7 @@ async function armTilt() {
   const verdict = await askForTilt();
   tiltWhy = verdict;
   if (verdict !== "granted") return;
-  tilt = attachTilt({ onStick: tiltPipe, hz: 30 });
+  tilt = attachTilt({ onStick: (x, y) => { tiltPipe(x, y); aimPipe(); }, hz: 30 });
 }
 
 /** Whatever you are holding when a round starts is neutral. Without this, half a room is fighting
@@ -447,6 +471,9 @@ addEventListener("pointermove", (e) => {
   if (!down || !joined || !S || S.phase !== "live" || onScreen !== "play") return;
   if (!S.you?.alive) return;                              // a throw you cannot make must not be previewed
   if (S.view?.kind === "arena") return;                   // an arena aims inside its own screen
+  // When the phone itself is the pointer, the server is already naming the target in the hero slot and a
+  // drag preview would be a second, disagreeing answer on the same screen.
+  if (S.view?.wantsAim && tilt?.live) return;
   const dx = e.clientX - down.x, dy = e.clientY - down.y;
   if (Math.hypot(dx, dy) <= 38) { aiming = null; return; }
   aiming = whoIsAt(aimFor(Math.atan2(dy, dx)))?.name || null;

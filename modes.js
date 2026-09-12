@@ -28,9 +28,20 @@ export const TUNING = {
   CHAIN_EXTEND: ms("HUDDLE_CHAIN_EXTEND_MS", 12000),
   WIRETAP: ms("HUDDLE_WIRETAP_MS", 90000),
   TILT_SPEED: ms("HUDDLE_TILT_SPEED", 900) / 1000,   // screens per second at full tilt
+  AIM_STALE: ms("HUDDLE_AIM_STALE_MS", 1500),   // an aim older than this cannot block anyone
+  SO_FLIGHT: ms("HUDDLE_SO_FLIGHT_MS", 900),    // the throw's time in the air IS the reaction window
+  SO_LOCK: ms("HUDDLE_SO_LOCK_MS", 700),
+  SO_FUSE_MIN: ms("HUDDLE_SO_FUSE_MIN_MS", 14000),
+  SO_FUSE_MAX: ms("HUDDLE_SO_FUSE_MAX_MS", 22000),
 };
 
-const { FLIGHT, LOCK, BRACE, FUSE_MIN, FUSE_MAX, GAP, RELAY_PENALTY, CHAIN_EXTEND, TILT_SPEED } = TUNING;
+// A room-wide escape hatch for the one number nobody can verify without a phone in their hand.
+// If the first playtest finds every aim landing on the person opposite, set this to 180 and the
+// room is playable in ten seconds instead of waiting on a redeploy.
+const AIM_OFFSET = (Number(process.env.HUDDLE_AIM_OFFSET_DEG) || 0) * Math.PI / 180;
+
+const { FLIGHT, LOCK, BRACE, FUSE_MIN, FUSE_MAX, GAP, RELAY_PENALTY, CHAIN_EXTEND, TILT_SPEED,
+        AIM_STALE, SO_FLIGHT, SO_LOCK, SO_FUSE_MIN, SO_FUSE_MAX } = TUNING;
 const CHAIN_RECALL = Math.round(CHAIN_EXTEND / 2);   // per tap, not per sequence
 
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -57,6 +68,27 @@ function ord(n) {
 // you are about to throw at while your finger is still down, and the server decides who actually
 // catches it. Two copies of this would eventually disagree, and the preview would start lying.
 export { apart, nearest, SAME_SEAT, seatBlocker, seatWaiting } from "./public/seats.js";
+
+/**
+ * Record where a player is physically pointing, and resolve it to a HUMAN.
+ *
+ * This one call is the project's whole claim. The phone sends an angle and nothing else — never a
+ * name, never an id, never a position — and the server decides which person is sitting there,
+ * using the seat that person dragged onto the ring themselves. Join order is not involved, which
+ * is the difference between this and a game you could get by making four people count off.
+ */
+function takeAim(ctx, d, p, angle) {
+  // typeof, not Number(): this is a trust boundary and JS coercion is full of traps here.
+  // Number(null) is 0, Number("") is 0, Number(true) is 1 — each of which would sail through a
+  // Number.isFinite check as a perfectly good aim at a direction nobody chose.
+  if (typeof angle !== "number" || !Number.isFinite(angle)) return false;
+  const a = Math.atan2(Math.sin(angle + AIM_OFFSET), Math.cos(angle + AIM_OFFSET));
+  const prev = d.aim[p.id];
+  const t = ctx.towards(p, a);
+  const to = t ? t.id : null;
+  d.aim[p.id] = { angle: a, at: ctx.now(), to, since: prev && prev.to === to ? prev.since : ctx.now() };
+  return true;
+}
 
 export const MODES = {
   // ------------------------------------------------------------------ hidden state
@@ -161,6 +193,165 @@ export const MODES = {
     },
   },
 
+
+  // ------------------------------------------------- the one that needs the room to be a room
+  // Everyone is aiming, all the time, and every aim resolves through the seat angles the players
+  // declared themselves — so your phone can tell you the NAME of the person you are pointing at.
+  // When the bomb is thrown at you your phone says INCOMING and refuses to say who threw it.
+  // That one withheld field is the entire game: the only way to find out is to look up, find the
+  // person whose phone is aimed at you, and face them back before it lands.
+  standoff: {
+    name: "Standoff", min: 2, wedgeMs: 60000,
+    blurb: "Point your phone at a person. It will not tell you who is pointing at you.",
+    start(ctx) {
+      const d = ctx.data;
+      d.holder = pick(ctx.alive()).id;
+      d.fuseAt = ctx.now() + rand(SO_FUSE_MIN, SO_FUSE_MAX);
+      d.startedAt = ctx.now();
+      d.lockUntil = ctx.now() + SO_LOCK;
+      d.flight = null;
+      d.aim = {};
+      d.lastEvent = null;
+    },
+    act(ctx, p, msg) {
+      const d = ctx.data;
+      if (msg.a === "aim") {
+        takeAim(ctx, d, p, msg.angle);
+        // ALWAYS false. Every phone streams this at 20-30Hz, and answering true would serialise
+        // the whole room once per message per player. The 50ms tick is the only broadcaster,
+        // and this mode reports a frame every tick anyway.
+        return false;
+      }
+      // A swipe both aims and throws, in one gesture. That is how a laptop plays, and how a
+      // phone whose owner refused motion access plays. It is not a degraded mode.
+      if (msg.a === "swipe") takeAim(ctx, d, p, msg.angle);
+      else if (msg.a !== "tap") return false;
+
+      if (d.holder !== p.id || d.flight || ctx.now() < d.lockUntil) return false;
+      const mine = d.aim[p.id];
+      if (!mine || mine.to == null || ctx.now() - mine.at > AIM_STALE) return false;
+      const target = ctx.players().find((q) => q.id === mine.to && q.alive && !q.gone);
+      if (!target) return false;
+      d.flight = { from: p.id, to: target.id, arriveAt: ctx.now() + SO_FLIGHT };
+      d.holder = null;
+      return true;
+    },
+    tick(ctx, now) {
+      const d = ctx.data;
+      const live = ctx.alive();
+      const ids = new Set(live.map((q) => q.id));
+
+      // An aim belonging to a phone that has gone would still be drawn as a needle on the room
+      // screen, pointing out of an empty seat.
+      for (const id of Object.keys(d.aim)) if (!ids.has(Number(id))) delete d.aim[id];
+
+      if (d.holder != null && !ids.has(d.holder)) {
+        d.holder = pick(live)?.id ?? null;
+        d.lockUntil = now + SO_LOCK;
+      }
+      if (d.flight && !ids.has(d.flight.to)) {
+        d.flight = null;
+        d.holder = pick(live)?.id ?? null;
+        d.lockUntil = now + SO_LOCK;
+      }
+
+      if (d.flight && now >= d.flight.arriveAt) {
+        // Judged at the LAST millisecond, so the flight is real reaction time and not a formality.
+        const { from, to } = d.flight;
+        const target = ctx.players().find((q) => q.id === to && q.alive && !q.gone);
+        const th = d.aim[to];
+        const facing = th && now - th.at <= AIM_STALE && th.to === from && ids.has(from);
+        // Blocking is off in a two-player room. With exactly one other person every aim
+        // resolves to them, so a block would always land and the holder could never lose. At
+        // two this collapses cleanly into hot potato with a hidden fuse — a game that starts,
+        // plays and ends — and two phones is the first thing anyone tries.
+        const blocked = live.length > 2 && !!target && !!facing;
+        d.flight = null;
+        d.lockUntil = now + SO_LOCK;
+        if (blocked) {
+          d.holder = from;
+          ctx.award(target, 1);
+          d.lastEvent = { kind: "block", by: to, from, at: now };
+          ctx.notice(`${target.name} looked straight at it`);
+        } else {
+          d.holder = (target || pick(live) || {}).id ?? null;
+          d.lastEvent = { kind: "catch", by: d.holder, from, at: now };
+        }
+      }
+
+      if (now >= d.fuseAt) {
+        const id = d.holder ?? d.flight?.to;
+        const loser = ctx.players().find((q) => q.id === id);
+        d.holder = null;
+        d.flight = null;
+        d.fuseAt = Infinity;
+        ctx.eliminate(loser, loser ? `${loser.name} was still holding it` : "nobody was holding it");
+      }
+      // Unconditionally true: a room of turning bodies needs a frame every tick. Safe against the
+      // wedge watchdog only because d.fuseAt always expires and always ends the round.
+      return true;
+    },
+    /**
+     * HARD RULE 3, AND THE PITCH. A player who is not holding the bomb is never sent the fuse
+     * deadline, never sent who is holding it, and — the important one — never sent who is aiming
+     * at them. They get ONE BIT: marked. The server knows the name. The room screen knows the
+     * name. The phone will not say it, and the only way to find out is to look up at the actual
+     * people in the actual room. Do not "fix" this by adding the name.
+     */
+    view(ctx, p) {
+      const d = ctx.data;
+      if (!p.alive) return { kind: "text", title: "OUT", sub: `${ctx.alive().length} still in`, tone: 0 };
+      // The rising tone and the draining bar play on EVERY phone off the same deadline, so the
+      // whole room feels the fuse without anyone learning where it is.
+      const shared = { tone: 1, toneFrom: d.startedAt, toneTo: d.fuseAt, wantsAim: true, ring: ringOf(ctx, p) };
+      const mine = d.aim[p.id];
+      const fresh = mine && ctx.now() - mine.at <= AIM_STALE;
+      const at = fresh && mine.to != null ? ctx.players().find((q) => q.id === mine.to) : null;
+      const aimName = at ? at.name : null;
+
+      if (d.flight?.to === p.id) {
+        return {
+          ...shared, kind: "text", big: aimName || "—", title: "INCOMING",
+          sub: "face whoever threw it", incomingAt: d.flight.arriveAt, hot: true, pulse: true,
+        };
+      }
+      if (d.holder === p.id) {
+        return {
+          ...shared, kind: "text", big: aimName || "—", countdownTo: d.fuseAt, title: "YOU HAVE IT",
+          sub: aimName ? "tap to throw" : "turn until it names someone",
+          hot: true, pulse: true, throwable: !!aimName && ctx.now() >= d.lockUntil,
+        };
+      }
+      const holderAim = d.holder != null ? d.aim[d.holder] : null;
+      const marked = !!holderAim && holderAim.to === p.id && ctx.now() - holderAim.at <= AIM_STALE;
+      return {
+        ...shared, kind: "text", big: aimName || "—",
+        title: marked ? "IN THE CROSSHAIRS" : "someone has it",
+        sub: marked ? "look up. find them. face them." : "point at people",
+        marked,
+      };
+    },
+    spectate(ctx) {
+      const d = ctx.data;
+      const live = ctx.alive();
+      const holder = ctx.players().find((q) => q.id === d.holder);
+      const aims = [];
+      for (const q of live) {
+        const a = d.aim[q.id];
+        if (a && a.to != null && ctx.now() - a.at <= AIM_STALE) {
+          aims.push({ from: q.id, to: a.to, holder: q.id === d.holder });
+        }
+      }
+      return {
+        kind: "sight", countdownTo: d.fuseAt,
+        title: d.flight ? "IN THE AIR" : (holder?.name || "—"),
+        sub: "nobody's phone says who is aiming at them",
+        strap: "THEIR PHONES KNOW WHO IS AIMING AT THEM. THE PHONES WILL NOT SAY.",
+        flightMs: SO_FLIGHT, lastEvent: d.lastEvent, aims,
+        map: { holder: d.holder, flight: d.flight, players: live.map((q) => ({ id: q.id, name: q.name, angle: q.seat })) },
+      };
+    },
+  },
   // ------------------------------------------- synchronised state (the clock sync, made visible)
   flash: {
     name: "Flash", min: 2,

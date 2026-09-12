@@ -85,6 +85,12 @@ between playtests without a redeploy.
 | `HUDDLE_WIRETAP_MS` | `90000` | How long the room has to find the pair |
 | `HUDDLE_TILT_SPEED` | `900` | How far a fully tilted phone flies its ship, in thousandths of a screen per second |
 | `HUDDLE_AUTO_LOBBY` | on | Set to `0` to keep a finished round on the winner screen instead of reopening the table after 8s |
+| `HUDDLE_AIM_STALE_MS` | `1500` | How long an aim counts for. Older than this and it cannot block anyone |
+| `HUDDLE_SO_FLIGHT_MS` | `900` | Standoff's throw time — this IS the window to turn and face it |
+| `HUDDLE_SO_LOCK_MS` | `700` | How long after catching before you can throw it on |
+| `HUDDLE_SO_FUSE_MIN_MS` | `14000` | Shortest Standoff fuse |
+| `HUDDLE_SO_FUSE_MAX_MS` | `22000` | Longest Standoff fuse |
+| `HUDDLE_AIM_OFFSET_DEG` | `0` | Room-wide aim offset. If the first playtest finds every aim landing on the wrong person, set this (try 180) instead of redeploying |
 
 ```bash
 HUDDLE_FUSE_MAX_MS=14000 HUDDLE_GAP_MS=180 npm start
