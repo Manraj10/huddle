@@ -172,6 +172,20 @@ they are actually sitting*, because players drag themselves onto a ring to say w
 not break the seat system. Lean on it — it is the most defensible thing here, and it is the one that
 matches the track blurb about being in a room with people.
 
+## Still open when this was written (an adversarial review found these)
+
+- **Blindside's fuse is `rand(14000, 26000)` plus a 2.4 s gap.** A worst-case first round eats 28 s
+  of a 3-minute pitch, and the novelty line is scheduled to land while a judge is holding a live
+  bomb and is not listening. Shorten the fuse for demos, or move the talking to before the round.
+- **`deploy/setup.sh` aborts on a re-run**: first run clones as root then chowns to `huddle`, so
+  every later run trips git's dubious-ownership check.
+- **Two MLH claims are written but not built.** MongoDB Atlas (stats currently write a JSON file to
+  disk) and ElevenLabs (there is no speech in the product at all). Either build them or keep them
+  out of the pitch — the docs now say NOT EARNED YET, do not quietly flip that back.
+- **`renderLobby` depends on five element ids.** If a redesign renames any of them, `render()`
+  throws and the lobby never paints, which means the Start button ships dead. Check the lobby in a
+  real browser after any markup change.
+
 ## What not to do
 
 - Do not add an eighth game.
