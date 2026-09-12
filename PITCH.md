@@ -2,85 +2,109 @@
 
 ## The one-sentence version
 
-Huddle is an engine for social party games where every player gets a different view of the same room, so the room itself becomes the mechanic — not the phone, not the avatar, and not a generic leaderboard.
+Huddle is an engine for phone party games where every player is sent a different view of the same
+room — and the game it exists to prove is **Standoff**, where you point your phone at a person and
+it will not tell you who is pointing at you.
 
-## Why this matters
+## Why the room is the mechanic
 
-The most common critique of phone-based party games is that they are really just app wrappers around a screen. Huddle is different. The product only works when people are physically in the same room, looking at each other, reacting to each other, and making decisions based on someone’s actual position at the table.
+Point your phone across the table. It says a name — the name of the human sitting at that angle,
+because everyone dragged their own dot onto a ring to say where they actually are. Turn your body,
+and the name changes.
 
-This is the technology layer that makes hidden information possible without leaking it to anyone else:
+Someone is holding a bomb on a hidden fuse. They throw it at whoever they are pointing at. Your
+phone says **INCOMING**. It does not say who threw it. The server knows. The laptop knows. Your
+phone will not say, and the throw is in the air for nine hundred milliseconds — so the only way to
+send it back is to look up, work out which person in the room has their phone aimed at you, and
+face them before it lands.
 
-- per-player truth: `view()` runs once per player, and each phone receives a different truth
-- seat geometry: a swipe is a direction, and a direction is a person in the room
-- shared-clock precision: every phone agrees on the same moment, to milliseconds
-- room-native play: people see, hear, and react to the same shared social space
+That is the product. A game whose central mechanic is **looking at other people**.
 
-## The three-minute judge script
+## Say the prior art out loud, first
 
-0:00 — "Everyone take out your phone and scan this."
+Every atom of this has an ancestor and we can name all of them. Getting caught reads as ignorance;
+pre-empting reads as taste.
 
-0:15 — We hand over already-joined loaner phones. The room is live in under twenty seconds, and judges are playing before the pitch has even started.
+| What | Who did it first |
+|---|---|
+| Private per-phone state in a co-located room | **Spaceteam**, 2012 |
+| Phones as no-install controllers | **Jackbox** 2014, **AirConsole** 2015 |
+| One game spanning several browser phones | **Chrome Racer**, Google, 2013 |
+| A bullet crossing the gap between two phones | **DUAL**, Seabaa, 2015 — and **Spatial Revenge**, itch.io, published days before this event, gyroscope and "dead zone between screens" included |
+| Tilt as a social, body-visible input | **Bounden** 2014, **Heads Up!** 2013 |
+| Phones working out where they are sitting, by sound | **Sonoloc**, MobiSys 2018, hundreds of phones — built on **BeepBeep**, 2007 |
+| Knowing which *person* you are facing | **Apple U1 / Nearby Interaction** 2020, **Samsung UWB Point to Share** 2020 |
+| Screenless, room-visible local multiplayer | **Johann Sebastian Joust**, 2011 |
+| Hidden-timer hot potato | Bomb Party, and a children's party game |
 
-0:20 — "Flash." Every phone lights up on the same millisecond. The room screen shows reaction times, and the room can immediately see the precision of the clock sync.
+**Then the delta, which is five clauses of constraint and survives every one of those:**
 
-0:50 — "Blindside." One person sees the fuse. Everyone else sees a room that looks normal. The room screen knows the truth and the players do not.
+> Apple's U1 and Samsung's UWB can already tell you which person you are facing — if you bought the
+> right phone in the right year. Sonoloc can make a hundred phones chirp at each other until they
+> know who is sitting where. What none of them do is this: **no install, no app store, no camera, no
+> UWB chip, no dongle.** You drag your own dot onto a ring to say where you are sitting, and from
+> then on your phone resolves the direction you are pointing to *the actual human at that angle* —
+> while the server holds a different truth for every phone in the room.
 
-1:25 — "Spaceteam did private per-phone state in 2012. Jackbox and AirConsole proved the phone-first room. Google’s Chrome Racer showed a room spanning several browsers. DUAL put a bullet across two screens in 2014. But what nobody has done is make the target of your input a person, at the angle they are actually sitting."
+## The three-minute script
 
-1:55 — We show the seats being placed in real time. A swipe is no longer a generic action; it is aimed at the person in front of you.
+- **0:00** "Everyone take out your phone and scan this." Loaner phones go out already joined.
+- **0:20** "Drag your dot to where you're actually sitting." Twenty seconds, and it is the only
+  setup — but it is also the claim, so say what it is for.
+- **0:35** **Standoff.** "Point your phone at someone." Every judge's phone names a person. They
+  turn; the name changes. No instructions needed past that sentence.
+- **1:05** Someone gets INCOMING. They look up. The room starts looking at each other — that is
+  the beat to shut up and let happen.
+- **1:30** Turn to the laptop. "Their phones know who is aiming at them. The phones will not say."
+  Every line of sight in the room, the holder's in red, the marked player ringed and labelled
+  DOESN'T KNOW.
+- **1:50** The prior art, in the wording above. Name the ancestors, then the five constraints.
+- **2:15** The engineering: `view(ctx, player)` runs once per player per broadcast, so the secret
+  is kept in the engine and not by asking the client not to look; median clock offset so every
+  phone agrees on the same millisecond; identity that survives a screen lock; rounds that carry on
+  when a phone leaves; and tests that assert a marked player's frame has the same key set as an
+  unmarked one, because a key set leaks as loudly as a value.
+- **2:40** The floor number: people who have played today, rounds, fastest reaction.
+- **2:50** "One link. No install. On whatever is already in your pocket."
 
-2:10 — "The engineering is the point here: authoritative server, per-player views, median clock offset, recovery when a phone drops mid-round, and a room screen that tells the truth while the phones hide it."
+## Answers to the two questions a judge will ask
 
-2:30 — The floor stat: number of people played, rounds completed, and the room’s actual pace.
+**"My iPhone already knows the direction of my friend's iPhone."**
+> It does — iPhone 11 and up, U1, Nearby Interaction. Samsung shipped "point at the people you're
+> facing" on the Note20. Both need the silicon in *both* phones. We get the same social geometry
+> from a two-second drag, in Safari, on anything with a browser. Nobody at this expo has to own the
+> right phone.
 
-2:50 — "One link. No install. On whatever is already in your pocket."
+**"Couldn't the phones work this out themselves with sound?"**
+> Yes — Sonoloc did exactly that at MobiSys 2018, on top of BeepBeep from 2007. We deliberately
+> didn't. A chirp-ranging pass costs seconds of silence, degrades in a loud hall, and needs a
+> microphone permission from every walk-up. Declaring your seat takes two seconds, never fails, and
+> is *more* accurate than trilateration — because the player is the sensor.
 
-## The demo run of show
+## Run of show
 
-- Keep 2–3 spare phones already joined and face-down on the table as JUDGE 1 / JUDGE 2 / JUDGE 3
-- Never demo with fewer than four phones
-- Keep a printed QR code as backup if the laptop dies
-- One teammate runs the room screen and the phones; one teammate speaks
-- Open with Flash, then Blindside, then seat placement
+- Never demo with fewer than four phones. Standoff's block is disabled at two on purpose.
+- Two or three loaner phones face-down, already joined and already seated, named JUDGE 1/2/3.
+- One person runs the laptop and the phones; one person talks.
+- Printed QR as backup if the laptop dies.
+- The table runs continuously through the expo. A finished round reopens the lobby on its own.
 
-## Prior art to name before the judges do
+## Track
 
-Say the names before a judge does:
+**Multiplayer** — "this is how you can meet people and touch grass." The central mechanic is
+working out which human is looking at you. It does not work over the internet, and it does not work
+if you are alone.
 
-- Spaceteam — private per-phone state driving in-room social play
-- Jackbox / AirConsole — room-scale phone-first party games
-- Chrome Racer — a shared room spanning multiple devices
-- DUAL — a bullet crossing the physical gap between two screens
+## Prizes
 
-Our delta is not "a party game with phones." Our delta is that the game is built around a real room, real seat angles, and real physical attention. Your input targets a person in front of you, not a name in a list and not an avatar in a virtual arena.
+Honest about which are earned:
 
-## Proof points the room should show
+- **Multiplayer track** and **People's Favourite** — the game is the argument.
+- **Best Design** — the phone is legible at arm's length; the room screen is built for an audience.
+- **MLH Vultr** — only if the server actually runs there.
+- **MLH MongoDB Atlas** — NOT EARNED. Stats write a JSON file (`deploy/stats.js`). Point that
+  writer at Atlas before claiming it, or drop the claim.
+- **MLH ElevenLabs** — NOT EARNED. There is no speech in the product; the only audio is one
+  oscillator. Build the announcer or drop the claim.
 
-- authoritative server: the room is the source of truth, not the clients
-- clock sync: every phone agrees on the same moment to within a few milliseconds
-- seat geometry: the desk plan is part of the mechanic
-- hidden-info gaming: the game state is kept in `view()`, not in the client
-
-This is what makes the project feel like a platform, not a one-off demo.
-
-## Track and prize framing
-
-Track: Multiplayer
-
-Justification: this is not a solo game on a screen. Huddle only works when people are in the same room together, talking, reacting, and physically sharing attention. That is exactly the social context the track is trying to reward.
-
-Prize targets:
-
-- People's Favourite
-- Best Design
-- MLH Vultr
-- MLH MongoDB Atlas (only if the stats writer is pointed at Atlas first — today it writes a JSON file)
-- MLH ElevenLabs (only if the room-screen announcer gets built — there is no speech today)
-
-Our stack stays deliberately lean: no login friction, no wallet, no token gimmick, no bolt-on “startup” layer. The product is strongest when it feels like a room game, not an app trying to win a prize by adding unrelated complexity.
-
-## Submission and project notes
-
-The repo should stay public through the event, and judges should be able to understand the engine in less than thirty seconds without reading a huge technical doc. The code shows the engine, but the pitch explains why it matters.
-
-The whole product is one room, one URL, and a shared set of rules that produce different truths for different people. That is Huddle.
+A judge who catches one false claim discounts every other one.
