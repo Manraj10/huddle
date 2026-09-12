@@ -33,6 +33,10 @@ export const TUNING = {
   SO_LOCK: ms("HUDDLE_SO_LOCK_MS", 700),
   SO_FUSE_MIN: ms("HUDDLE_SO_FUSE_MIN_MS", 14000),
   SO_FUSE_MAX: ms("HUDDLE_SO_FUSE_MAX_MS", 22000),
+  CHAIR_BEAT: ms("HUDDLE_CHAIR_BEAT_MS", 5000),     // first beat window
+  CHAIR_FLOOR: ms("HUDDLE_CHAIR_FLOOR_MS", 2000),   // fastest the ladder goes
+  CHAIR_STEP: ms("HUDDLE_CHAIR_STEP_MS", 450),      // how much each clear shaves off
+  CHAIR_VERDICT: ms("HUDDLE_CHAIR_VERDICT_MS", 2400),
 };
 
 // A room-wide escape hatch for the one number nobody can verify without a phone in their hand.
@@ -45,7 +49,11 @@ const AIM_OFFSET = (Number(process.env.HUDDLE_AIM_OFFSET_DEG) || 0) * Math.PI / 
 export const AIM_INVERT = process.env.HUDDLE_AIM_INVERT === "1";
 
 const { FLIGHT, LOCK, BRACE, FUSE_MIN, FUSE_MAX, GAP, RELAY_PENALTY, CHAIN_EXTEND, TILT_SPEED,
-        AIM_STALE, SO_FLIGHT, SO_LOCK, SO_FUSE_MIN, SO_FUSE_MAX } = TUNING;
+        AIM_STALE, SO_FLIGHT, SO_LOCK, SO_FUSE_MIN, SO_FUSE_MAX,
+        CHAIR_BEAT, CHAIR_FLOOR, CHAIR_STEP, CHAIR_VERDICT } = TUNING;
+
+/** Modes a stranger sees in the lobby. Everything else stays in MODES for tests / power users. */
+export const LOBBY_MODES = ["chairs", "flash"];
 const CHAIN_RECALL = Math.round(CHAIN_EXTEND / 2);   // per tap, not per sequence
 
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -100,7 +108,186 @@ function takeAim(ctx, d, p, angle) {
   return true;
 }
 
+/**
+ * Freeze every fresh aim and build per-player verdicts. Pure so the tests can assert the joke
+ * ("TAKEN — PRIYA, also KAI") without spinning a room.
+ *
+ * A phone only ever learns about ITS OWN target and who else claimed that same person — never
+ * who is aiming at the phone's owner. That withheld graph is the whole product.
+ */
+export function judgeChairs(live, aim, now, stale = Infinity) {
+  const byTarget = new Map();
+  const chosen = new Map();
+  for (const p of live) {
+    const a = aim[p.id];
+    // No expiry by default: a target you picked is a target you are holding. See the note on
+    // judgeChairs' signature — an expiry here silently excludes everyone without a gyroscope.
+    if (!a || a.to == null || now - a.at > stale) continue;
+    chosen.set(p.id, a.to);
+    if (!byTarget.has(a.to)) byTarget.set(a.to, []);
+    byTarget.get(a.to).push(p.id);
+  }
+  const nameOf = (id) => live.find((q) => q.id === id)?.name || "?";
+  const verdicts = {};
+  let unique = 0;
+  for (const p of live) {
+    const to = chosen.get(p.id);
+    if (to == null) {
+      verdicts[p.id] = { kind: "miss", big: "—", title: "NOBODY", sub: "you weren't pointing" };
+      continue;
+    }
+    const claimers = byTarget.get(to) || [];
+    const targetName = nameOf(to);
+    if (claimers.length === 1) {
+      unique++;
+      verdicts[p.id] = { kind: "clear", big: targetName, title: "YOURS", sub: "nobody else claimed them" };
+    } else {
+      const others = claimers.filter((id) => id !== p.id).map(nameOf);
+      const also = others.length <= 1
+        ? (others[0] || "?")
+        : `${others.slice(0, -1).join(", ")}, also ${others.at(-1)}`;
+      verdicts[p.id] = { kind: "taken", big: targetName, title: "TAKEN", sub: also };
+    }
+  }
+  return { verdicts, unique, needed: Math.max(1, Math.ceil(live.length / 2)), byTarget };
+}
+
 export const MODES = {
+  chairs: {
+    name: "Chairs", min: 3, wedgeMs: 180000,
+    blurb: "Point at someone nobody else is pointing at.",
+    start(ctx) {
+      const d = ctx.data;
+      d.level = 1;
+      d.beatMs = CHAIR_BEAT;
+      d.phase = "aim";
+      d.openedAt = ctx.now();
+      d.beatAt = ctx.now() + d.beatMs;
+      d.verdictUntil = 0;
+      d.aim = {};
+      d.verdicts = {};
+      d.unique = 0;
+      d.needed = 0;
+      d.cleared = false;
+      d.lastEvent = null;
+    },
+    act(ctx, p, msg) {
+      const d = ctx.data;
+      if (d.phase !== "aim") return false;
+      if (msg.a === "aim") { takeAim(ctx, d, p, msg.angle); return false; }
+      if (msg.a === "swipe") return takeAim(ctx, d, p, msg.angle);
+      return false;
+    },
+    tick(ctx, now) {
+      const d = ctx.data;
+      const live = ctx.alive();
+      const ids = new Set(live.map((q) => q.id));
+      for (const id of Object.keys(d.aim)) if (!ids.has(Number(id))) delete d.aim[id];
+      if (live.length < 3) {
+        ctx.finishRound(null, { big: `LV ${d.level}`, title: "not enough phones", sub: "need 3+ seated" });
+        return true;
+      }
+
+      if (d.phase === "aim" && now >= d.beatAt) {
+        const judged = judgeChairs(live, d.aim, now);
+        d.verdicts = judged.verdicts;
+        d.unique = judged.unique;
+        d.needed = judged.needed;
+        d.cleared = judged.unique >= judged.needed;
+        d.phase = "verdict";
+        d.verdictUntil = now + CHAIR_VERDICT;
+        d.lastEvent = { kind: d.cleared ? "clear" : "fail", unique: d.unique, needed: d.needed, at: now };
+        ctx.notice(d.cleared
+          ? `level ${d.level} — ${d.unique} clear`
+          : `only ${d.unique}/${d.needed} unique — done at level ${d.level}`);
+        for (const p of live) if (judged.verdicts[p.id]?.kind === "clear") ctx.award(p, 1);
+      }
+
+      if (d.phase === "verdict" && now >= d.verdictUntil) {
+        if (d.cleared) {
+          d.level += 1;
+          d.beatMs = Math.max(CHAIR_FLOOR, d.beatMs - CHAIR_STEP);
+          d.phase = "aim";
+          d.openedAt = now;
+          d.beatAt = now + d.beatMs;
+          d.aim = {};
+          d.verdicts = {};
+          d.cleared = false;
+          ctx.notice("");
+        } else {
+          const best = ctx.records.chairs;
+          if (best == null || d.level > best) ctx.setRecord("chairs", d.level);
+          ctx.finishRound(null, {
+            big: `LV ${d.level}`,
+            title: "room record " + (ctx.records.chairs ?? d.level),
+            sub: `${d.unique} unique on the last beat`,
+          });
+        }
+      }
+      return true;
+    },
+    view(ctx, p) {
+      const d = ctx.data;
+      const shared = { wantsAim: d.phase === "aim", ring: ringOf(ctx, p) };
+      if (d.phase === "verdict") {
+        const v = d.verdicts[p.id] || { kind: "miss", big: "—", title: "NOBODY", sub: "" };
+        return {
+          ...shared, kind: "text", big: v.big, title: v.title, sub: v.sub,
+          clear: v.kind === "clear", taken: v.kind === "taken",
+          pulse: v.kind === "taken",
+        };
+      }
+      const mine = d.aim[p.id];
+      // Sticky, like the judging. A swipe player who aims once must keep seeing their target, or
+      // the phone says "—" while the server still has them holding somebody.
+      const fresh = !!mine;
+      const at = fresh && mine.to != null ? ctx.players().find((q) => q.id === mine.to) : null;
+      return {
+        ...shared, kind: "text",
+        big: at?.name || "—",
+        title: "POINT",
+        sub: at ? "nobody else — hold it" : "at someone nobody else is on",
+        countdownTo: d.beatAt,
+        tone: 1, toneFrom: d.openedAt, toneTo: d.beatAt,
+        pulse: true,
+      };
+    },
+    spectate(ctx) {
+      const d = ctx.data;
+      const live = ctx.alive();
+      const aims = [];
+      const counts = new Map();
+      for (const q of live) {
+        const a = d.aim[q.id];
+        if (a && a.to != null) {
+          counts.set(a.to, (counts.get(a.to) || 0) + 1);
+          aims.push({ from: q.id, to: a.to, holder: false });
+        }
+      }
+      for (const a of aims) a.collide = (counts.get(a.to) || 0) > 1;
+      const dayBest = ctx.records.chairs;
+      return {
+        kind: "sight",
+        countdownTo: d.phase === "aim" ? d.beatAt : undefined,
+        big: d.phase === "verdict" ? `${d.unique}/${d.needed}` : `LV ${d.level}`,
+        title: d.phase === "verdict"
+          ? (d.cleared ? "CLEAR" : "STACKED")
+          : `level ${d.level}` + (dayBest != null ? ` · best ${dayBest}` : ""),
+        sub: d.phase === "verdict"
+          ? `${d.unique} unique · need ${d.needed}`
+          : "point at someone nobody else is pointing at",
+        strap: "PHONES NAME WHO YOU CLAIM. THEY NEVER SAY WHO CLAIMED YOU.",
+        aims,
+        lastEvent: d.lastEvent,
+        map: {
+          holder: null, flight: null,
+          collide: [...counts].filter(([, n]) => n > 1).map(([id]) => id),
+          players: live.map((q) => ({ id: q.id, name: q.name, angle: q.seat })),
+        },
+      };
+    },
+  },
+
   // ------------------------------------------------- the one that needs the room to be a room
   // Everyone is aiming, all the time, and every aim resolves through the seat angles the players
   // declared themselves — so your phone can tell you the NAME of the person you are pointing at.
