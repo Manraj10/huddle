@@ -142,12 +142,18 @@ new QRCode(document.getElementById("qr"), {
 });
 
 let lastHolder = null, lastNotice = "", boomUntil = 0, fuseSpan = 20000, fuseEnd = 0;
+let flightSpan = 700, flightTo = 0;
 const localTicker = { rounds: 0, people: new Set(), bestReactionMs: null };
 let lastPhase = null;
 
 function onView(m) {
   const map = m.view?.map;
   if (map?.holder != null) lastHolder = map.holder;
+  // First sight of this throw tells us how long it is in the air, whatever FLIGHT is tuned to.
+  if (map?.flight && map.flight.arriveAt !== flightTo) {
+    flightTo = map.flight.arriveAt;
+    flightSpan = Math.max(120, flightTo - serverNow());
+  }
   if (m.view?.countdownTo && m.view.countdownTo !== fuseEnd) {
     fuseEnd = m.view.countdownTo;
     fuseSpan = Math.max(3000, fuseEnd - serverNow());
@@ -327,7 +333,7 @@ function draw() {
     const from = byId.get(lastHolder);
     const to = byId.get(flight.to);
     if (from && to) {
-      const p = 1 - Math.max(0, Math.min(1, (flight.arriveAt - serverNow()) / 700));
+      const p = 1 - Math.max(0, Math.min(1, (flight.arriveAt - serverNow()) / flightSpan));
       const a = pos(from.angle, cx, cy, r);
       const b = pos(to.angle, cx, cy, r);
       const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
