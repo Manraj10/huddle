@@ -1,0 +1,14 @@
+[Unit]
+Description=Cloudflare tunnel for Huddle (TLS without a domain)
+After=network-online.target huddle.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=huddle
+ExecStart=/usr/local/bin/cloudflared tunnel --url http://127.0.0.1:8080 --no-autoupdate
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,20 @@
+[Unit]
+Description=Huddle party engine
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=huddle
+Group=huddle
+WorkingDirectory=/opt/huddle
+ExecStart=/usr/bin/node /opt/huddle/server.js
+Environment=PORT=8080
+Environment=NODE_ENV=production
+Restart=always
+RestartSec=2
+# A wedged round is worse than a restart; the engine already self-resets, this is the last net.
+WatchdogSec=0
+
+[Install]
+WantedBy=multi-user.target
