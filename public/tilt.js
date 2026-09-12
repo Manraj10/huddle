@@ -107,7 +107,11 @@ export function attachTilt({ onStick, hz = 30, range = 28, dead = 3, tau = 70 } 
     return typeof a === "number" ? a : (typeof globalThis.orientation === "number" ? globalThis.orientation : 0);
   };
 
+  let alpha = null;
   function onEvent(e) {
+    // alpha arrives on phones that give nothing else useful, and aiming only needs alpha, so it
+    // is taken before the beta/gamma guard rather than after it.
+    if (e.alpha != null) alpha = e.alpha;
     if (e.beta == null || e.gamma == null) return;
     handle.live = true;
     if (!have) { neutral.beta = e.beta; neutral.gamma = e.gamma; have = true; }
@@ -132,6 +136,9 @@ export function attachTilt({ onStick, hz = 30, range = 28, dead = 3, tau = 70 } 
   const timer = setInterval(frame, minGap / 2);
   addEventListener("deviceorientation", onEvent);
 
+  /** Where the VIEWPORT is pointing, or null if this phone has no yaw to give. Aiming reads deltas
+   *  of this, never the value, so it never needs to mean north. */
+  handle.yaw = () => (alpha == null ? null : viewportYaw(alpha, screenAngle()));
   handle.recalibrate = () => { have = false; sx = sy = null; lastSent = null; };
   handle.stop = () => { clearInterval(timer); removeEventListener("deviceorientation", onEvent); };
   return handle;

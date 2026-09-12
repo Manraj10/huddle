@@ -306,7 +306,7 @@ button:disabled { opacity: .38; }
 <div class="fuse" id="fuse" hidden aria-hidden="true"><i id="fuseFill"></i></div>
 
 <script type="module">
-import { askForTilt, attachTilt } from "/tilt.js";
+import { aimAngle, askForTilt, attachTilt } from "/tilt.js";
 const $ = (id) => document.getElementById(id);
 const app = $("app"), ringEl = $("ring"), play = $("play"), hero = $("hero");
 const bigEl = $("big"), clockEl = $("clock"), titleEl = $("title"), subEl = $("sub");
@@ -366,7 +366,24 @@ const buzz = (ms) => navigator.vibrate?.(ms);
 //
 // The client sends the STICK, never a position. The server integrates it. A phone that could
 // declare where its ship is could declare that it is standing on top of yours.
-let tilt = null, tiltWhy = null, tiltSent = 0;
+let tilt = null, tiltWhy = null, tiltSent = 0, seatYaw = null;
+
+/**
+ * A swipe, turned into a direction in the room rather than a direction on a screen.
+ *
+ * The seat ring and the swipe are both drawn in the phone's own frame, so they mean the same
+ * thing only while the phone keeps the yaw it was seated at. Someone who picks their phone up,
+ * turns to talk to a neighbour and swipes is aiming at a person; without this they are aiming at
+ * whoever happens to be at that angle on a screen that has since rotated under them.
+ *
+ * Falls back to the raw screen angle whenever there is no yaw to work with, which is what this
+ * has always done and is exactly right for a laptop or a phone that refused the sensor.
+ */
+function aimFor(screenAngle) {
+  const yaw = tilt?.yaw();
+  if (yaw == null || seatYaw == null) return screenAngle;
+  return aimAngle(screenAngle, yaw, seatYaw);
+}
 
 function tiltPipe(x, y) {
   if (!joined || !ws || ws.readyState !== 1) return;
@@ -432,9 +449,9 @@ addEventListener("pointerup", (e) => {
     return;
   }
   if (Math.hypot(dx, dy) > 38) {
-    const angle = Math.atan2(dy, dx);
-    ws?.send(JSON.stringify({ t: "act", a: "swipe", angle }));
-    streak(angle);                                  // a throw with no acknowledgement reads as a bug
+    const drawn = Math.atan2(dy, dx);
+    ws?.send(JSON.stringify({ t: "act", a: "swipe", angle: aimFor(drawn) }));
+    streak(drawn);                                  // the streak follows the finger, not the room
     buzz(18);
   } else ws?.send(JSON.stringify({ t: "act", a: "tap" }));
 });
@@ -526,6 +543,10 @@ function pushSeat(force) {
   const t = Date.now();
   if (!force && t - lastSeatSend < 60) return;       // live enough to watch, quiet enough to not flood
   lastSeatSend = t;
+  // The frame you were holding the phone in when you said where you sit IS the room's frame for
+  // you. Everything aimed afterwards is measured against it.
+  const yaw = tilt?.yaw();
+  if (yaw != null) seatYaw = yaw;
   ws?.send(JSON.stringify({ t: "seat", angle: mySeat }));
 }
 seatsEl.addEventListener("pointerdown", (e) => {
