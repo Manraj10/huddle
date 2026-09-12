@@ -306,6 +306,7 @@ button:disabled { opacity: .38; }
 <div class="fuse" id="fuse" hidden aria-hidden="true"><i id="fuseFill"></i></div>
 
 <script type="module">
+import { askForTilt, attachTilt } from "/tilt.js";
 const $ = (id) => document.getElementById(id);
 const app = $("app"), ringEl = $("ring"), play = $("play"), hero = $("hero");
 const bigEl = $("big"), clockEl = $("clock"), titleEl = $("title"), subEl = $("sub");
@@ -351,6 +352,52 @@ function tone(level) {
 // A garnish on the Androids that have it, never a signal we depend on: iOS Safari cannot vibrate,
 // so every state below is already legible without it.
 const buzz = (ms) => navigator.vibrate?.(ms);
+
+// ---- tilt ----------------------------------------------------------------------
+// The phone itself is the stick. Continuous, physical, and visible from across the room, which is
+// the whole reason the handoff says to build it: a tap is a thing that happens somewhere else, a
+// tilt is your hand on the object.
+//
+// The client sends the STICK, never a position. The server integrates it. A phone that could
+// declare where its ship is could declare that it is standing on top of yours.
+let tilt = null, tiltWhy = null, tiltSent = 0;
+
+function tiltPipe(x, y) {
+  if (!joined || !ws || ws.readyState !== 1) return;
+  if (!S || S.phase !== "live" || !S.you?.alive) return;
+  if (!S.view?.wantsTilt) return;                   // only a mode that asked for it pays the wire
+  const t = Date.now();
+  if (t - tiltSent < 33) return;                    // 30Hz ceiling regardless of the sensor's rate
+  tiltSent = t;
+  ws.send(JSON.stringify({ t: "act", a: "tilt", x, y }));
+}
+
+/**
+ * iOS grants orientation only inside a real user gesture, so this runs in the Join handler
+ * alongside the AudioContext. Everything it can return is a playable state — the drag fallback is
+ * not a degraded mode, it is how anyone who cannot tilt a phone plays, which is also the
+ * accessibility answer.
+ */
+async function armTilt() {
+  if (tilt) return;
+  const verdict = await askForTilt();
+  tiltWhy = verdict;
+  if (verdict !== "granted") return;
+  tilt = attachTilt({ onStick: tiltPipe, hz: 30 });
+}
+
+/** Whatever you are holding when a round starts is neutral. Without this, half a room is fighting
+ *  an offset it cannot see and concludes the game is broken. */
+function recalibrate() { tilt?.recalibrate(); }
+
+/** One line, once, and never mid-round: why your phone is not tilting. */
+function tiltNotice() {
+  if (tilt?.live) return null;
+  if (tiltWhy === "insecure") return "open the https link — a plain http page gets no sensor at all";
+  if (tiltWhy === "denied") return "motion access denied — drag to move instead";
+  if (tiltWhy === "unsupported" || tiltWhy === null) return "no motion sensor here — drag to move instead";
+  return "tilt your phone";                          // granted, but nothing has arrived yet
+}
 
 // ---- input --------------------------------------------------------------------
 let down = null;
@@ -423,6 +470,7 @@ connect();
 
 $("j").onclick = () => {
   audioOn();                                        // iOS only grants audio inside a real gesture
+  armTilt();                                        // and orientation, in the same one
   name = store.name = ($("n").value || "player").slice(0, 12);
   ws?.send(JSON.stringify({ t: "join", name, token: TOKEN }));
 };
@@ -580,7 +628,7 @@ arena.addEventListener("pointermove", (e) => {
 });
 
 // ---- the one place a view turns into pixels -----------------------------------------
-let everAlive = false, wasHolding = false, wasAlive = true, litNow = false;
+let everAlive = false, wasHolding = false, wasAlive = true, litNow = false, phaseWas = null;
 let screen = "join";
 
 function show(next) {
@@ -684,6 +732,16 @@ function paint() {
     bg = "var(--win)"; ink = "var(--win-ink)"; shape = "diamond"; label = "winner";
     if (alive && everAlive) { big = "YOU WIN"; title = ""; }
   }
+
+  // Whatever you happen to be holding when the round starts is neutral. Flat on the table and up
+  // at your chest are both legitimate ways to hold a phone and they are sixty degrees apart.
+  if (S.phase !== phaseWas) {
+    if (S.phase === "live") recalibrate();
+    phaseWas = S.phase;
+  }
+  // A phone that cannot tilt says so where you are already looking, and says it for as long as it
+  // is true rather than flashing once and leaving you to guess.
+  if (v.wantsTilt && !tilt?.live) sub = tiltNotice() || sub;
 
   // ---- transitions worth a frame of animation
   const holding = !!v.hot;
