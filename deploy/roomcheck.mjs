@@ -60,6 +60,14 @@ class Phone {
   die() { this.ws.terminate(); }
 }
 
+/**
+ * The angle a phone at seat `a` must send to aim at a person at seat `b` — the direction between
+ * two PEOPLE, not the target's bearing from the middle of the table. Those agree only for the
+ * person sitting directly opposite, which is exactly why aiming straight across always worked here
+ * and aiming at a neighbour never did.
+ */
+const toward = (a, b) => Math.atan2(Math.sin(b) - Math.sin(a), Math.cos(b) - Math.cos(a));
+
 /** Poll the latest view until `pred` holds. Views arrive on broadcast, not on request. */
 async function until(phone, pred, what, ms = 3000) {
   const t0 = Date.now();
@@ -185,7 +193,7 @@ try {
 
     // Everyone points straight across the table at the person opposite them.
     const OPPOSITE = { 0: 2, 1: 3, 2: 0, 3: 1 };
-    for (let i = 0; i < 4; i++) phones[i].act({ a: "aim", angle: ANGLES[OPPOSITE[i]] });
+    for (let i = 0; i < 4; i++) phones[i].act({ a: "aim", angle: toward(ANGLES[i], ANGLES[OPPOSITE[i]]) });
     await sleep(250);
 
     const named = phones.map((ph) => ph.latest?.view?.big);
@@ -230,7 +238,7 @@ try {
 
       // Turn and face the thrower inside the flight window. The block is judged at the last
       // millisecond, so this is real reaction time rather than a formality.
-      target.act({ a: "aim", angle: ANGLES[hi] });
+      target.act({ a: "aim", angle: toward(ANGLES[OPPOSITE[hi]], ANGLES[hi]) });
       const back = await until(holder, (m) => m.view?.title === "YOU HAVE IT", "it comes back", 4000);
       is(!!back, "facing the throw sends it straight back to the thrower",
         `holder view: ${holder.latest?.view?.title}`);
@@ -260,17 +268,17 @@ try {
       await until(phones[0], (m) => m.phase === "live" && m.mode === "standoff", "standoff", 5000);
       await sleep(200);
       const OPP = { 0: 2, 1: 3, 2: 0, 3: 1 };
-      for (let i = 0; i < 4; i++) phones[i].act({ a: "aim", angle: ANGLES[OPP[i]] });
+      for (let i = 0; i < 4; i++) phones[i].act({ a: "aim", angle: toward(ANGLES[i], ANGLES[OPP[i]]) });
       await sleep(250);
       const holder = phones.find((ph) => ph.latest?.view?.title === "YOU HAVE IT");
       if (!holder) return null;
       const hi = phones.indexOf(holder);
       const target = phones[OPP[hi]];
 
-      const hb = setInterval(() => holder.act({ a: "aim", angle: ANGLES[OPP[hi]] }), 250);
-      target.act({ a: "aim", angle: ANGLES[hi] });          // face the thrower, once
+      const hb = setInterval(() => holder.act({ a: "aim", angle: toward(ANGLES[hi], ANGLES[OPP[hi]]) }), 250);
+      target.act({ a: "aim", angle: toward(ANGLES[OPP[hi]], ANGLES[hi]) });   // face the thrower, once
       const tb = targetKeepsBeating
-        ? setInterval(() => target.act({ a: "aim", angle: ANGLES[hi] }), 250)
+        ? setInterval(() => target.act({ a: "aim", angle: toward(ANGLES[OPP[hi]], ANGLES[hi]) }), 250)
         : null;
 
       await until(holder, (m) => m.view?.throwable === true, "armed", 5000);
@@ -385,7 +393,7 @@ try {
     const nextName = String(h.latest.view.title || "").replace(/^PASS TO /, "").trim();
     const target = phones.find((p) => p.name === nextName);
     if (!target) break;
-    h.act({ a: "swipe", angle: ANGLES[phones.indexOf(target)] });
+    h.act({ a: "swipe", angle: toward(ANGLES[phones.indexOf(h)], ANGLES[phones.indexOf(target)]) });
     await sleep(90);
     if (h.latest?.phase === "over") break;
   }

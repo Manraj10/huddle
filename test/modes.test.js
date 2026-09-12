@@ -50,6 +50,19 @@ function room(names = ["ALFA", "BRAVO", "CHARLIE", "DELTA"], opts = {}) {
       push() {},
     },
   };
+  /**
+   * The angle you would physically point, sitting where `from` sits, to aim at `to`.
+   *
+   * Tests used to pass the target's SEAT ANGLE as the aim, which is a bearing from the centre of
+   * the table rather than a direction between two people. That silently encoded the bug the
+   * chord fix removed: at six players those differ by sixty degrees. A test should say what the
+   * player DOES — point at that human — and let the geometry be the thing under test.
+   */
+  r.toward = (fromName, toName) => {
+    const a = (typeof fromName === "string" ? r.at(fromName) : fromName).seat;
+    const b = (typeof toName === "string" ? r.at(toName) : toName).seat;
+    return Math.atan2(Math.sin(b) - Math.sin(a), Math.cos(b) - Math.cos(a));
+  };
   r.start = (key) => { data = {}; MODES[key].start(r.ctx); return r; };
   r.act = (name, msg) => MODES[r.key].act(r.ctx, r.at(name), msg);
   r.tick = () => MODES[r.key].tick(r.ctx, clock);
@@ -148,7 +161,7 @@ test("relay: a clean lap round the ring finishes and becomes the room's record",
     const holder = name(d.order[d.at]);
     const next = r.players.find((p) => p.id === d.order[(d.at + 1) % d.order.length]);
     r.advance(300);
-    assert.equal(r.act(holder, { a: "swipe", angle: next.seat }), true);
+    assert.equal(r.act(holder, { a: "swipe", angle: r.toward(holder, next) }), true);
   }
   assert.equal(d.passes, d.need, "the token came all the way back round");
   assert.equal(d.done, true);
@@ -164,7 +177,7 @@ test("relay: passing to the wrong neighbour costs the room two seconds and not t
   const name = (id) => r.players.find((p) => p.id === id).name;
   const holder = name(d.order[d.at]);
   const wrong = r.players.find((p) => p.id === d.order[(d.at + 2) % d.order.length]);
-  assert.equal(r.act(holder, { a: "swipe", angle: wrong.seat }), true);
+  assert.equal(r.act(holder, { a: "swipe", angle: r.toward(holder, wrong) }), true);
   assert.equal(d.penalty, TUNING.RELAY_PENALTY);
   assert.equal(d.passes, 0, "a wrong pass does not advance the lap");
   assert.equal(d.order[d.at], r.at(holder).id, "and the token stays where it was");
@@ -205,7 +218,7 @@ test("relay: a phone leaving mid-lap does not strand the token", () => {
     const who = name(d.order[d.at]);
     const next = r.players.find((p) => p.id === d.order[(d.at + 1) % d.order.length]);
     r.advance(200);
-    r.act(who, { a: "swipe", angle: next.seat });
+    r.act(who, { a: "swipe", angle: r.toward(who, next) });
   }
   assert.equal(d.done, true, "the lap still completes with three");
 });
@@ -235,7 +248,7 @@ test("chain: the extender sees the sequence and nobody else does", () => {
   const d = r.data;
   const extender = r.players.find((p) => p.id === d.ring[d.turn]);
   const victim = r.players.find((p) => p.id !== extender.id);
-  r.act(extender.name, { a: "swipe", angle: victim.seat });
+  r.act(extender.name, { a: "swipe", angle: r.toward(extender, victim) });
   assert.deepEqual(d.seq, [victim.id]);
   assert.equal(d.phase, "recall");
 
@@ -254,7 +267,7 @@ test("chain: recall in order advances, out of turn breaks it", () => {
   const d = r.data;
   const extender = r.players.find((p) => p.id === d.ring[d.turn]);
   const first = r.players.find((p) => p.id !== extender.id);
-  r.act(extender.name, { a: "swipe", angle: first.seat });
+  r.act(extender.name, { a: "swipe", angle: r.toward(extender, first) });
 
   const wrongPerson = r.players.find((p) => p.id !== first.id);
   r.act(wrongPerson.name, { a: "tap" });
@@ -271,7 +284,7 @@ test("chain: you are told your own places and never the room's progress", () => 
   const d = r.data;
   const extender = r.players.find((p) => p.id === d.ring[d.turn]);
   const first = r.players.find((p) => p.id !== extender.id);
-  r.act(extender.name, { a: "swipe", angle: first.seat });
+  r.act(extender.name, { a: "swipe", angle: r.toward(extender, first) });
   const v = r.view(first.name);
   assert.equal(v.title, "TAP IN ORDER");
   assert.match(v.sub, /you are 1st/);
@@ -284,7 +297,7 @@ test("chain: a phone leaving rebuilds the chain instead of putting an innocent p
   const d = r.data;
   const extender = r.players.find((p) => p.id === d.ring[d.turn]);
   const first = r.players.find((p) => p.id !== extender.id);
-  r.act(extender.name, { a: "swipe", angle: first.seat });
+  r.act(extender.name, { a: "swipe", angle: r.toward(extender, first) });
   assert.equal(d.phase, "recall");
 
   r.drop(first.name);
@@ -335,9 +348,9 @@ test("wiretap: the pair scoring two each requires both of them to swipe at each 
   const r = room(["ALFA", "BRAVO", "CHARLIE", "DELTA", "ECHO"]).play("wiretap");
   const d = r.data;
   const [a, b] = d.pair.map((id) => r.players.find((p) => p.id === id));
-  r.act(a.name, { a: "swipe", angle: b.seat });
+  r.act(a.name, { a: "swipe", angle: r.toward(a, b) });
   assert.equal(d.over, false, "one half of a pair reaching out is not a pair finding each other");
-  r.act(b.name, { a: "swipe", angle: a.seat });
+  r.act(b.name, { a: "swipe", angle: r.toward(b, a) });
   assert.equal(d.over, true);
   assert.equal(a.score, 2);
   assert.equal(b.score, 2);
@@ -349,7 +362,7 @@ test("wiretap: an outsider who guesses a pair member hands the round to the room
   const d = r.data;
   const target = r.players.find((p) => d.pair.includes(p.id));
   const outsider = r.players.find((p) => !d.pair.includes(p.id));
-  r.act(outsider.name, { a: "swipe", angle: target.seat });
+  r.act(outsider.name, { a: "swipe", angle: r.toward(outsider, target) });
   assert.equal(d.over, true);
   assert.equal(outsider.score, 1);
   assert.equal(target.score, 0, "the pair score nothing when they are caught");
@@ -705,4 +718,72 @@ test("duel: an unflown ship cannot win by standing still once its phone has gone
   r.advance(50);
   assert.equal(r.tick(), true);
   assert.equal(r.log.finished.winner, "ALFA");
+});
+
+// ---- pointing at a human ----------------------------------------------------
+// The project's one defensible claim is that your input targets the person actually sitting at
+// that angle. It was not true. nearest() compared an aim against each player's SEAT ANGLE — a
+// bearing from the centre of the table, which says where someone is SITTING — while the direction
+// from you to them is the CHORD between two points on the ring. Those agree only for the person
+// directly opposite you, and the gap grows with the table: at six players you had to point sixty
+// degrees away from someone to select them.
+
+/** Where you would physically point, sitting at `a`, to aim at someone sitting at `b`. */
+const chordTo = (a, b) => Math.atan2(Math.sin(b) - Math.sin(a), Math.cos(b) - Math.cos(a));
+
+test("pointing at a person reaches that person, at every table size", () => {
+  for (const n of [2, 3, 4, 5, 6, 7, 8, 10]) {
+    const ps = Array.from({ length: n }, (_, i) => ({
+      id: i + 1, name: `P${i + 1}`, seat: (i / n) * 2 * Math.PI, alive: true, gone: false, placed: true,
+    }));
+    for (const from of ps) {
+      for (const to of ps) {
+        if (from.id === to.id) continue;
+        const got = nearest(ps, from, chordTo(from.seat, to.seat));
+        assert.equal(got.name, to.name, `n=${n}: ${from.name} pointed at ${to.name} and reached ${got.name}`);
+      }
+    }
+  }
+});
+
+test("and it still works when nobody is evenly spaced, which is the real case", () => {
+  // People drag their dots where they actually are. A neat polygon is the one arrangement that
+  // never happens at a real table.
+  const seats = [0.2, 0.9, 1.1, 2.8, 4.4, 4.6, 5.9];
+  const ps = seats.map((seat, i) => ({ id: i + 1, name: `Q${i + 1}`, seat, alive: true, gone: false, placed: true }));
+  for (const from of ps) {
+    for (const to of ps) {
+      if (from.id === to.id) continue;
+      assert.equal(nearest(ps, from, chordTo(from.seat, to.seat)).name, to.name,
+        `${from.name} -> ${to.name} on a lopsided table`);
+    }
+  }
+});
+
+test("every aim resolves to somebody, and never to the person aiming", () => {
+  const ps = Array.from({ length: 6 }, (_, i) => ({
+    id: i + 1, name: `P${i + 1}`, seat: (i / 6) * 2 * Math.PI, alive: true, gone: false, placed: true,
+  }));
+  for (const from of ps) {
+    for (let a = -Math.PI; a < Math.PI; a += 0.05) {
+      const got = nearest(ps, from, a);
+      assert.ok(got, "an aim always lands on somebody");
+      assert.notEqual(got.id, from.id, "and never on yourself");
+    }
+  }
+});
+
+test("the names in the gutters point where the engine will actually send it", () => {
+  // The ring labels ARE the swipe targets. Drawing them at a seat bearing while resolving against
+  // a chord meant the label said one thing and the engine did another.
+  const r = room(["ALFA", "BRAVO", "CHARLIE", "DELTA", "ECHO", "FOX"]).play("blindside");
+  const d = r.data;
+  const holder = r.players.find((p) => p.id === d.holder);
+  const ring = r.view(holder.name).ring;
+  assert.ok(ring && ring.length === 5, "everyone else is on the ring");
+  for (const entry of ring) {
+    const got = nearest(r.players, holder, entry.angle);
+    assert.equal(got.name, entry.name,
+      `swiping at where ${entry.name} is drawn must reach ${entry.name}, not ${got.name}`);
+  }
 });

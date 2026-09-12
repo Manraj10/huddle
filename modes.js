@@ -51,7 +51,12 @@ const CHAIN_RECALL = Math.round(CHAIN_EXTEND / 2);   // per tap, not per sequenc
 const rand = (a, b) => a + Math.random() * (b - a);
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 const secs = (n) => `${(n / 1000).toFixed(1)}s`;
-const ringOf = (ctx, me) => ctx.alive().filter((p) => p.id !== me.id).map((p) => ({ name: p.name, angle: p.seat }));
+// The names in the screen gutters are the swipe targets, so they must be drawn at the angle you
+// would actually point to reach that person — the same chord bearing nearest() resolves against.
+// Drawing them at their seat bearing and resolving against something else meant the label said one
+// thing and the engine did another, and at a table of six they disagreed by sixty degrees.
+const ringOf = (ctx, me) =>
+  ctx.alive().filter((p) => p.id !== me.id).map((p) => ({ name: p.name, angle: bearing(me.seat, p.seat) }));
 
 function shuffle(list) {
   for (let i = list.length - 1; i > 0; i--) {
@@ -71,7 +76,8 @@ function ord(n) {
 // It lives under public/ because the PHONE needs the same arithmetic: the client shows you who
 // you are about to throw at while your finger is still down, and the server decides who actually
 // catches it. Two copies of this would eventually disagree, and the preview would start lying.
-export { apart, nearest, SAME_SEAT, seatBlocker, seatWaiting } from "./public/seats.js";
+export { apart, bearing, nearest, SAME_SEAT, seatBlocker, seatWaiting } from "./public/seats.js";
+import { bearing } from "./public/seats.js";
 
 /**
  * Record where a player is physically pointing, and resolve it to a HUMAN.

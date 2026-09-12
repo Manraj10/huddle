@@ -12,13 +12,42 @@
 /** Shortest angle between two seats, wrapping correctly across 0/2π. */
 export const apart = (a, b) => Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)));
 
-/** Whoever is sitting closest to `angle`, excluding the person who swiped. */
+/**
+ * The direction you would physically point to aim from one seat at another.
+ *
+ * THIS IS NOT THE TARGET'S SEAT ANGLE, and conflating the two was wrong in a way that got worse
+ * the more people sat down. A seat angle is a bearing from the CENTRE of the table — it says where
+ * someone is sitting. The direction from you to them is the CHORD between two points on the ring,
+ * and the two only agree for the person sitting directly opposite you.
+ *
+ * Measured against the old behaviour, pointing physically at a human resolved to:
+ *   N=3  everyone correct
+ *   N=4  everyone correct, but two of three by an exact 0-degree tie broken by array order
+ *   N=5  two of four WRONG
+ *   N=6  three of five WRONG
+ *   N=8  four of seven WRONG, four of them exact ties
+ * The worst single error is 90 - 180/N degrees: at a table of six you had to point sixty degrees
+ * away from someone to select them.
+ *
+ * Chords also handle the real case, which is not a neat polygon — players drag their dots wherever
+ * they actually are, so the seats are never evenly spaced.
+ */
+export function bearing(fromSeat, toSeat) {
+  const dx = Math.cos(toSeat) - Math.cos(fromSeat);
+  const dy = Math.sin(toSeat) - Math.sin(fromSeat);
+  // Two people on the same spot have no direction between them. seatBlocker stops a round before
+  // this can matter; falling back to the seat keeps it defined rather than NaN.
+  if (Math.abs(dx) < 1e-12 && Math.abs(dy) < 1e-12) return toSeat;
+  return Math.atan2(dy, dx);
+}
+
+/** Whoever `angle` actually points at, from where the pointer is sitting. */
 export function nearest(list, from, angle) {
   const others = list.filter((p) => p.id !== from.id);
   if (!others.length) return null;
   let best = others[0], bestD = Infinity;
   for (const p of others) {
-    const d = apart(p.seat, angle);
+    const d = apart(bearing(from.seat, p.seat), angle);
     if (d < bestD) { best = p; bestD = d; }
   }
   return best;
