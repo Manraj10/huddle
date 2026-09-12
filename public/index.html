@@ -45,10 +45,17 @@
            font-size:12px; font-weight:800; letter-spacing:.1em; }
   .warn { position:fixed; top:8px; left:50%; transform:translateX(-50%); background:#3a2a10; color:#ffc857;
           padding:5px 12px; border-radius:999px; font-size:12px; font-weight:700; letter-spacing:.08em; }
+  .seatpad { display:block; margin:14px auto 4px; touch-action:none; }
+  .seathint { font-size:13px; font-weight:600; color:var(--dim); min-height:19px; margin-bottom:4px; }
+  .seathint.block { color:#ffc857; }
+  button:disabled { opacity:.35; }
+  .arena { position:fixed; inset:0; width:100%; height:100%; display:none; touch-action:none; z-index:2; }
+  .arena.on { display:block; }
 </style>
 
 <button class="reset" id="reset" title="back to lobby">RESET</button>
 <div id="app"></div>
+<canvas class="arena" id="arena"></canvas>
 <div class="ring" id="ring"></div>
 <div class="scores" id="scores"></div>
 <div class="notice" id="notice"></div>
@@ -95,6 +102,10 @@ function tone(level) {
 const buzz = (ms) => navigator.vibrate && navigator.vibrate(ms);
 
 // ---- input ----
+// Three different things want the pointer: the swipe/tap gestures every text mode is built on,
+// the lobby seat picker, and Duel's arena. They cannot all listen on the window at once, so the
+// renderer declares which one is live and the other two stay out of the way.
+let inputMode = "gesture";
 let down = null;
 $("reset").addEventListener("pointerdown", (e) => e.stopPropagation());
 $("reset").addEventListener("pointerup", (e) => e.stopPropagation());
@@ -102,15 +113,146 @@ $("reset").onclick = () => {
   ws?.send(JSON.stringify({ t: "reset" }));
   ws?.send(JSON.stringify({ t: "kickGhosts" }));
 };
-addEventListener("pointerdown", (e) => { down = { x: e.clientX, y: e.clientY }; });
+addEventListener("pointerdown", (e) => { if (inputMode === "gesture") down = { x: e.clientX, y: e.clientY }; });
 addEventListener("pointercancel", () => { down = null; });
 addEventListener("pointerup", (e) => {
-  if (!down || !joined) return;
+  if (inputMode !== "gesture" || !down || !joined) return;
   const dx = e.clientX - down.x, dy = e.clientY - down.y, far = Math.hypot(dx, dy) > 38;
   down = null;
   if (far) { ws?.send(JSON.stringify({ t: "act", a: "swipe", angle: Math.atan2(dy, dx) })); buzz(18); }
   else ws?.send(JSON.stringify({ t: "act", a: "tap" }));
 });
+
+// ---- seats. The engine claims a swipe reaches the person actually sitting there, which is only
+// true if people say where they are, so this is the one bit of client the claim depends on. ----
+let seatDrag = false, seatSent = 0, mySeat = null, lastSeats = [], lobbyKey = "";
+
+function wireSeatPad(pad) {
+  const place = (e, force) => {
+    const r = pad.getBoundingClientRect();
+    mySeat = Math.atan2(e.clientY - (r.top + r.height / 2), e.clientX - (r.left + r.width / 2));
+    paintSeats(lastSeats);
+    const t = Date.now();
+    if (!force && t - seatSent < 60) return;
+    seatSent = t;
+    ws?.send(JSON.stringify({ t: "seat", angle: mySeat }));
+  };
+  pad.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+    seatDrag = true;
+    pad.setPointerCapture(e.pointerId);
+    place(e, true);
+  });
+  pad.addEventListener("pointermove", (e) => { if (seatDrag) place(e, false); });
+  pad.addEventListener("pointerup", (e) => { if (seatDrag) { seatDrag = false; place(e, true); } });
+  pad.addEventListener("pointercancel", () => { seatDrag = false; });
+}
+
+function paintSeats(seats) {
+  lastSeats = seats || [];
+  const c = $("seatpad");
+  if (!c) return;
+  const dpr = Math.min(devicePixelRatio || 1, 2), size = c.clientWidth || 230;
+  if (c.width !== Math.floor(size * dpr)) { c.width = c.height = Math.floor(size * dpr); }
+  const g = c.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, size, size);
+  const cx = size / 2, cy = size / 2, r = size / 2 - 26;
+  g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2);
+  g.fillStyle = "#141a26"; g.fill();
+  g.strokeStyle = "#252f43"; g.lineWidth = 2; g.stroke();
+  g.textAlign = "center"; g.textBaseline = "middle";
+  g.fillStyle = "#4a5470"; g.font = "700 10px ui-sans-serif,system-ui,sans-serif";
+  g.fillText("THE TABLE", cx, cy);
+  for (const s of lastSeats) {
+    const angle = s.you ? (mySeat ?? (s.placed ? s.angle : -Math.PI / 2)) : s.angle;
+    if (!s.placed && !s.you) continue;                 // they have not sat down yet
+    const x = cx + Math.cos(angle) * r, y = cy + Math.sin(angle) * r;
+    g.globalAlpha = s.placed || s.you ? 1 : 0.4;
+    if (s.you && !s.placed) g.globalAlpha = 0.5;
+    g.beginPath(); g.arc(x, y, s.you ? 12 : 9, 0, Math.PI * 2);
+    g.fillStyle = s.you ? "#ffc857" : "#3dd68c"; g.fill();
+    g.globalAlpha = 1;
+    g.fillStyle = s.you ? "#ffc857" : "#8d97ab";
+    g.font = "800 10px ui-sans-serif,system-ui,sans-serif";
+    g.fillText(s.you ? "YOU" : s.name.slice(0, 8).toUpperCase(), x, y + (Math.sin(angle) >= 0 ? 22 : -22));
+  }
+}
+
+// ---- the arena. Drag moves, tap fires: they have to be separate gestures or you shoot every
+// time you reposition, which makes the game unplayable in about four seconds. ----
+let arenaDown = null, arenaMoved = false, arenaSent = 0, myShip = { x: 0.5, y: 0.5 };
+const arenaEl = $("arena");
+const arenaPoint = (e) => ({
+  x: Math.min(1, Math.max(0, e.clientX / innerWidth)),
+  y: Math.min(1, Math.max(0, e.clientY / innerHeight)),
+});
+arenaEl.addEventListener("pointerdown", (e) => {
+  e.stopPropagation();
+  arenaDown = arenaPoint(e); arenaMoved = false;
+  arenaEl.setPointerCapture(e.pointerId);
+});
+arenaEl.addEventListener("pointermove", (e) => {
+  if (!arenaDown) return;
+  const p = arenaPoint(e);
+  if (!arenaMoved && Math.hypot((p.x - arenaDown.x) * innerWidth, (p.y - arenaDown.y) * innerHeight) > 12) arenaMoved = true;
+  if (!arenaMoved) return;
+  myShip = p;
+  const t = Date.now();
+  if (t - arenaSent < 45) return;
+  arenaSent = t;
+  ws?.send(JSON.stringify({ t: "act", a: "move", x: p.x, y: p.y }));
+});
+arenaEl.addEventListener("pointerup", (e) => {
+  if (!arenaDown) return;
+  const p = arenaPoint(e);
+  arenaDown = null;
+  if (arenaMoved) return ws?.send(JSON.stringify({ t: "act", a: "move", x: p.x, y: p.y }));
+  ws?.send(JSON.stringify({ t: "act", a: "fire", dir: Math.atan2((p.y - myShip.y) * innerHeight, (p.x - myShip.x) * innerWidth) }));
+  buzz(12);
+});
+arenaEl.addEventListener("pointercancel", () => { arenaDown = null; });
+
+function drawArena(v) {
+  const c = arenaEl, g = c.getContext("2d");
+  const dpr = Math.min(devicePixelRatio || 1, 2), w = innerWidth, h = innerHeight;
+  if (c.width !== Math.floor(w * dpr) || c.height !== Math.floor(h * dpr)) {
+    c.width = Math.floor(w * dpr); c.height = Math.floor(h * dpr);
+  }
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.fillStyle = "#070a12"; g.fillRect(0, 0, w, h);
+  if (!arenaDown) myShip = v.you;
+
+  // The edges with a neighbour behind them are the only way out of your screen, and the only way
+  // in. Everything interesting happens in the dark between them.
+  for (const side of ["left", "right"]) {
+    if (v.edge !== side && v.edge !== "both") continue;
+    const x0 = side === "left" ? 0 : w;
+    const grad = g.createLinearGradient(x0, 0, side === "left" ? 30 : w - 30, 0);
+    grad.addColorStop(0, "rgba(123,158,255,.42)");
+    grad.addColorStop(1, "rgba(123,158,255,0)");
+    g.fillStyle = grad;
+    g.fillRect(side === "left" ? 0 : w - 30, 0, 30, h);
+  }
+  for (const o of v.objects || []) {
+    g.beginPath(); g.arc(o.x * w, o.y * h, Math.max(4, o.r * Math.min(w, h)), 0, Math.PI * 2);
+    g.fillStyle = o.c || "#ffffff"; g.fill();
+  }
+  const sx = v.you.x * w, sy = v.you.y * h;
+  g.beginPath(); g.arc(sx, sy, 26, 0, Math.PI * 2);
+  g.strokeStyle = "rgba(238,244,255,.25)"; g.lineWidth = 2; g.stroke();
+  g.beginPath(); g.arc(sx, sy, 16, 0, Math.PI * 2);
+  g.fillStyle = "#eef4ff"; g.fill();
+
+  g.textAlign = "left"; g.textBaseline = "top";
+  g.fillStyle = "#eef4ff"; g.font = "800 15px ui-sans-serif,system-ui,sans-serif";
+  g.fillText(v.title || "", 16, 16);
+  g.textAlign = "center"; g.textBaseline = "bottom";
+  g.fillStyle = "#8d97ab"; g.font = "700 13px ui-sans-serif,system-ui,sans-serif";
+  g.fillText(v.sub || "", w / 2, h - 34);
+  g.fillStyle = "#4a5470"; g.font = "600 12px ui-sans-serif,system-ui,sans-serif";
+  g.fillText("drag to move · tap to fire", w / 2, h - 14);
+}
 
 // ---- connection, with reconnect. iOS freezes sockets on screen lock and often never fires
 // onclose, so silence on the ping/pong is the real signal. ----
@@ -200,23 +342,56 @@ function render() {
     `<span class="${p.alive ? "" : "out"}">${p.name}${p.score ? ` <i>${p.score}</i>` : ""}</span>`).join("");
   $("notice").textContent = S.phase === "live" ? "" : (S.notice || "");
 
-  if (v.lobby) {
-    app.innerHTML = `<div><div class="title">${S.modeName}</div><div class="sub">${sub || ""}</div>
+  if (v.lobby) return renderLobby(v, sub);
+
+  if (v.kind === "arena") {
+    inputMode = "arena";
+    lobbyKey = "";
+    app.innerHTML = "";
+    drawRing(null);
+    arenaEl.classList.add("on");
+    drawArena(v);
+    return;
+  }
+
+  inputMode = "gesture";
+  lobbyKey = "";
+  arenaEl.classList.remove("on");
+  app.innerHTML = `<div class="${v.dim ? "dim" : ""}">
+    ${big != null ? `<div class="big ${v.pulse ? "pulse" : ""}">${big}</div>` : ""}
+    ${title ? `<div class="title">${title}</div>` : ""}
+    ${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+  drawRing(v.ring);
+}
+
+function renderLobby(v, sub) {
+  inputMode = "seat";
+  drawRing(null);
+  arenaEl.classList.remove("on");
+  // Rebuilding this DOM under a finger that is mid-drag drops the pointer capture and the dot
+  // snaps back to where the last broadcast put it. The live parts are updated in place instead.
+  const key = `${S.mode}|${S.modes.map((m) => m.key).join(",")}`;
+  if (key !== lobbyKey && !seatDrag) {
+    app.innerHTML = `<div><div class="title">${S.modeName}</div><div class="sub" id="lobsub"></div>
+      <canvas class="seatpad" id="seatpad" style="width:min(60vw,220px);height:min(60vw,220px)"></canvas>
+      <div class="seathint" id="seatnote"></div>
       <div class="modes" id="modes">${S.modes.map((m) =>
         `<button class="ghost${m.key === S.mode ? " on" : ""}" data-k="${m.key}">${m.name}
           <small>${m.blurb} &middot; ${m.min}+ players</small></button>`).join("")}</div>
       <button id="go">Start ${S.modeName}</button></div>`;
     for (const b of $("modes").children) b.onclick = () => ws.send(JSON.stringify({ t: "start", mode: b.dataset.k }));
     $("go").onclick = () => ws.send(JSON.stringify({ t: "start", mode: S.mode }));
-    drawRing(null);
-    return;
+    wireSeatPad($("seatpad"));
+    lobbyKey = key;
   }
-
-  app.innerHTML = `<div class="${v.dim ? "dim" : ""}">
-    ${big != null ? `<div class="big ${v.pulse ? "pulse" : ""}">${big}</div>` : ""}
-    ${title ? `<div class="title">${title}</div>` : ""}
-    ${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
-  drawRing(v.ring);
+  if (!$("seatpad")) return;
+  const mine = (v.seats || []).find((s) => s.you);
+  if (mine?.placed && !seatDrag) mySeat = mine.angle;
+  $("lobsub").textContent = sub || "";
+  $("seatnote").textContent = v.seatNotice || "everyone is seated";
+  $("seatnote").classList.toggle("block", !!v.seatNotice);
+  $("go").disabled = !!v.seatNotice;
+  paintSeats(v.seats);
 }
 
 setInterval(() => { if (S && S.phase === "live") render(); }, 60);
