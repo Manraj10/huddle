@@ -307,6 +307,7 @@ button:disabled { opacity: .38; }
 
 <script type="module">
 import { aimAngle, askForTilt, attachTilt } from "/tilt.js";
+import { nearest } from "/seats.js";
 const $ = (id) => document.getElementById(id);
 const app = $("app"), ringEl = $("ring"), play = $("play"), hero = $("hero");
 const bigEl = $("big"), clockEl = $("clock"), titleEl = $("title"), subEl = $("sub");
@@ -379,6 +380,14 @@ let tilt = null, tiltWhy = null, tiltSent = 0, seatYaw = null;
  * Falls back to the raw screen angle whenever there is no yaw to work with, which is what this
  * has always done and is exactly right for a laptop or a phone that refused the sensor.
  */
+/** Who this angle would actually reach, using the same arithmetic the server will use. */
+function whoIsAt(angle) {
+  const meId = myId();
+  const others = (S?.players || []).filter((q) => q.alive && q.id !== meId);
+  if (!others.length) return null;
+  return nearest(others, { id: meId }, angle);
+}
+
 function aimFor(screenAngle) {
   const yaw = tilt?.yaw();
   if (yaw == null || seatYaw == null) return screenAngle;
@@ -423,16 +432,26 @@ function tiltNotice() {
 }
 
 // ---- input --------------------------------------------------------------------
-let down = null;
+let down = null, aiming = null;
 for (const t of ["pointerdown", "pointerup"]) $("reset").addEventListener(t, (e) => e.stopPropagation());
 $("reset").onclick = () => {
   ws?.send(JSON.stringify({ t: "reset" }));
   ws?.send(JSON.stringify({ t: "kickGhosts" }));
 };
-addEventListener("pointerdown", (e) => { down = { x: e.clientX, y: e.clientY }; });
-addEventListener("pointercancel", () => { down = null; });
+addEventListener("pointerdown", (e) => { down = { x: e.clientX, y: e.clientY }; aiming = null; });
+addEventListener("pointercancel", () => { down = null; aiming = null; });
+// A throw you cannot aim is a coin flip you are blamed for. While the finger is down the phone
+// names the person the swipe currently resolves to, which is also the fastest way to see that
+// turning your body changes who you are pointing at — the entire claim, felt rather than read.
+addEventListener("pointermove", (e) => {
+  if (!down || !joined || !S || S.phase !== "live" || onScreen !== "play") return;
+  if (S.view?.kind === "arena") return;                   // an arena aims inside its own screen
+  const dx = e.clientX - down.x, dy = e.clientY - down.y;
+  if (Math.hypot(dx, dy) <= 38) { aiming = null; return; }
+  aiming = whoIsAt(aimFor(Math.atan2(dy, dx)))?.name || null;
+});
 addEventListener("pointerup", (e) => {
-  const start = down; down = null;
+  const start = down; down = null; aiming = null;
   if (!start || !joined || !S || S.phase !== "live") return;
   const dx = e.clientX - start.x, dy = e.clientY - start.y;
   // In an arena the two gestures mean different things from everywhere else: you are aiming
@@ -771,6 +790,8 @@ function paint() {
   // A phone that cannot tilt says so where you are already looking, and says it for as long as it
   // is true rather than flashing once and leaving you to guess.
   if (v.wantsTilt && !tilt?.live) sub = tiltNotice() || sub;
+  // Mid-throw, the only thing worth saying is who is about to catch it.
+  if (aiming) sub = `→ ${aiming}`;
 
   // ---- transitions worth a frame of animation
   const holding = !!v.hot;
